@@ -21,7 +21,6 @@ app.add_middleware(
 client = genai.Client()
 
 CHAT_MODEL = "gemini-2.0-flash"
-IMAGE_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
     message: str
@@ -49,29 +48,6 @@ async def chat_endpoint(
     file: UploadFile = File(None)
 ):
     try:
-        if mode == "image":
-            result = client.models.generate_images(
-                model=IMAGE_MODEL,
-                prompt=message,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    output_mime_type="image/jpeg",
-                    aspect_ratio="1:1",
-                )
-            )
-            
-            if result.generated_images:
-                img_bytes = result.generated_images[0].image.image_bytes
-                encoded_img = base64.b64encode(img_bytes).decode("utf-8")
-                data_url = f"data:image/jpeg;base64,{encoded_img}"
-                
-                reply_text = f"🎨 Сгенерированное изображение по запросу: *{message}*"
-                return {
-                    "response": f"{reply_text}\n<img src='{data_url}' alt='Generated Image'/>"
-                }
-            else:
-                raise HTTPException(status_code=500, detail="Не удалось сгенерировать изображение.")
-
         # Превращаем историю в формат SDK google-genai
         history_list = json.loads(history)
         formatted_history = []
@@ -194,7 +170,6 @@ async def get_chat_ui():
             .message { padding: 12px 16px; border-radius: 14px; max-width: 85%; line-height: 1.5; overflow-wrap: break-word; white-space: pre-wrap; font-size: 0.95rem; align-self: flex-start; }
             .message.user { background: #242424 !important; color: #e0e0e0 !important; align-self: flex-end; border: 1px solid #333; }
             .message.ai { background: #0e0e0e; color: #b5b5b5; border: 1px solid #222; }
-            .message img { max-width: 100%; border-radius: 8px; margin-top: 8px; display: block; border: 1px solid #333; }
             
             .file-preview-pill { display: inline-flex; align-items: center; gap: 6px; background: #181818; border: 1px solid #333; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; color: #ccc; margin-bottom: 8px; width: fit-content; }
             .file-preview-pill button { background: none; border: none; color: #888; cursor: pointer; font-weight: bold; font-size: 1rem; }
@@ -205,13 +180,6 @@ async def get_chat_ui():
             
             textarea { flex: 1; background: transparent; border: none; color: #b5b5b5; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 4px 0; }
             textarea::placeholder { color: #4a4a4a; }
-            
-            .mode-toggle-btn { 
-                background: #141414; border: 1px solid #222; color: #888; padding: 6px 10px; 
-                border-radius: 12px; font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: all 0.2s; 
-                display: flex; align-items: center; gap: 4px; flex-shrink: 0;
-            }
-            .mode-toggle-btn.image-mode { background: #2e1065; color: #c084fc; border-color: #6b21a8; }
 
             .attach-btn { background: #141414; border: 1px solid #222; color: #aaa; min-width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }
             .attach-btn:hover { background: #222; color: #fff; border-color: #444; }
@@ -240,7 +208,7 @@ async def get_chat_ui():
             <div class="logo-area">
                 <div>
                     <div class="logo-title">RUBINOV-AI</div>
-                    <div class="logo-subtitle">MULTIMODAL & IMAGEN 3</div>
+                    <div class="logo-subtitle">MULTIMODAL CHAT</div>
                 </div>
                 <button class="close-sidebar-btn" onclick="toggleSidebar()">✕</button>
             </div>
@@ -277,13 +245,13 @@ async def get_chat_ui():
                 <div class="welcome-container" id="welcomeContainer">
                     <div class="welcome-card">
                         <div class="welcome-title">Чем я могу помочь сегодня?</div>
-                        <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключите режим для создания картинок.</div>
+                        <div class="welcome-subtitle">Задайте вопрос или загрузите файл для анализа.</div>
                     </div>
                     <div class="chips-grid">
-                        <div class="chip" onclick="sendPreset('Нарисуй футуристический спорткар на закате', true)">🎨 Сгенерировать спорткар</div>
-                        <div class="chip" onclick="sendPreset('Нарисуй волшебный сказочный лес в сумерках с биолюминесцентными растениями', true)">🌲 Сгенерировать лес</div>
                         <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
                         <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
+                        <div class="chip" onclick="sendPreset('Составь план продуктивного дня')">📋 План дня</div>
+                        <div class="chip" onclick="sendPreset('Расскажи интересный факт из истории космонавтики')">🚀 Космос</div>
                     </div>
                 </div>
             </div>
@@ -294,8 +262,6 @@ async def get_chat_ui():
                     <div class="input-row">
                         <button class="attach-btn" title="Прикрепить файл" onclick="document.getElementById('fileInput').click()">📎</button>
                         <input type="file" id="fileInput" style="display:none" onchange="handleFileSelect(event)">
-                        
-                        <button id="modeToggleBtn" class="mode-toggle-btn" onclick="toggleImageMode()" title="Переключить режим генерации картинок">💬 Чат</button>
                         
                         <textarea id="userInput" rows="1" placeholder="Введите сообщение..." oninput="autoResize(this)" onkeydown="handleKeyDown(event)"></textarea>
                         
@@ -309,7 +275,6 @@ async def get_chat_ui():
             let chats = JSON.parse(localStorage.getItem('rubinov_chats') || '[]');
             let currentChatId = localStorage.getItem('rubinov_current_id') || null;
             let selectedFile = null;
-            let isImageMode = false;
 
             async function checkServerReady() {
                 try {
@@ -350,21 +315,6 @@ async def get_chat_ui():
                 }
             }
 
-            function toggleImageMode() {
-                isImageMode = !isImageMode;
-                const btn = document.getElementById('modeToggleBtn');
-                const input = document.getElementById('userInput');
-                if (isImageMode) {
-                    btn.classList.add('image-mode');
-                    btn.innerText = '🎨 Картинка';
-                    input.placeholder = 'Опишите изображение для генерации...';
-                } else {
-                    btn.classList.remove('image-mode');
-                    btn.innerText = '💬 Чат';
-                    input.placeholder = 'Введите сообщение...';
-                }
-            }
-
             function handleFileSelect(e) {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -384,12 +334,7 @@ async def get_chat_ui():
                 document.getElementById('filePreviewArea').innerHTML = '';
             }
 
-            function sendPreset(text, imageMode = false) {
-                if (imageMode && !isImageMode) {
-                    toggleImageMode();
-                } else if (!imageMode && isImageMode) {
-                    toggleImageMode();
-                }
+            function sendPreset(text) {
                 document.getElementById('userInput').value = text;
                 sendMessage();
             }
@@ -402,13 +347,13 @@ async def get_chat_ui():
                     <div class="welcome-container" id="welcomeContainer">
                         <div class="welcome-card">
                             <div class="welcome-title">Чем я могу помочь сегодня?</div>
-                            <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключите режим для создания картинок.</div>
+                            <div class="welcome-subtitle">Задайте вопрос или загрузите файл для анализа.</div>
                         </div>
                         <div class="chips-grid">
-                            <div class="chip" onclick="sendPreset('Нарисуй футуристический спорткар на закате', true)">🎨 Сгенерировать спорткар</div>
-                            <div class="chip" onclick="sendPreset('Нарисуй волшебный сказочный лес в сумерках с биолюминесцентными растениями', true)">🌲 Сгенерировать лес</div>
                             <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
                             <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
+                            <div class="chip" onclick="sendPreset('Составь план продуктивного дня')">📋 План дня</div>
+                            <div class="chip" onclick="sendPreset('Расскажи интересный факт из истории космонавтики')">🚀 Космос</div>
                         </div>
                     </div>
                 `;
@@ -478,9 +423,7 @@ async def get_chat_ui():
                 const userMsgDiv = document.createElement('div');
                 userMsgDiv.className = 'message user';
                 let displayContent = text;
-                if (isImageMode) {
-                    displayContent = `[Генерация картинки]: ${text}`;
-                } else if (selectedFile) {
+                if (selectedFile) {
                     displayContent = `[Файл: ${selectedFile.name}]<br>` + displayContent;
                 }
                 userMsgDiv.innerHTML = displayContent;
@@ -489,28 +432,25 @@ async def get_chat_ui():
                 input.value = '';
                 input.style.height = 'auto';
                 const fileToSend = selectedFile;
-                const currentMode = isImageMode ? 'image' : 'chat';
                 removeFile();
 
                 document.getElementById('aiStatusBadge').classList.add('active');
                 document.getElementById('sendBtn').disabled = true;
                 container.scrollTop = container.scrollHeight;
 
-                // Собираем историю для передачи на бэкенд
                 let currentHistory = [];
                 if (currentChatId) {
                     const activeChat = chats.find(c => c.id === currentChatId);
                     if (activeChat) {
                         currentHistory = activeChat.messages.map(m => ({
                             role: m.role,
-                            content: m.content.includes('<img') ? '[Изображение]' : m.content
+                            content: m.content
                         }));
                     }
                 }
 
                 const formData = new FormData();
                 formData.append('message', text);
-                formData.append('mode', currentMode);
                 formData.append('history', JSON.stringify(currentHistory));
                 if (fileToSend) {
                     formData.append('file', fileToSend);
