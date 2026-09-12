@@ -27,68 +27,68 @@ async def get_chat_ui():
         <title>RubinovAi Pro</title>
         <style>
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-            body { background: #0b0f19; color: #f8fafc; display: flex; height: 100vh; overflow: hidden; }
+            body { background: #000000; color: #f3f4f6; display: flex; height: 100vh; overflow: hidden; }
             
             /* Sidebar */
-            .sidebar { width: 280px; background: #111827; display: flex; flex-direction: column; border-right: 1px solid #1f2937; padding: 16px; }
+            .sidebar { width: 280px; background: #0a0a0a; display: flex; flex-direction: column; border-right: 1px solid #1f1f1f; padding: 16px; }
             .logo-area { margin-bottom: 24px; }
-            .logo-title { font-size: 1.1rem; font-weight: bold; letter-spacing: 0.5px; color: #fff; }
-            .logo-subtitle { font-size: 0.75rem; color: #38bdf8; font-weight: 600; margin-top: 4px; }
+            .logo-title { font-size: 1.1rem; font-weight: bold; letter-spacing: 0.5px; color: #ffffff; }
+            .logo-subtitle { font-size: 0.75rem; color: #737373; font-weight: 600; margin-top: 4px; }
             
-            .new-chat-btn { background: #0284c7; color: white; border: none; padding: 10px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 16px; transition: background 0.2s; display: flex; align-items: center; gap: 8px; }
-            .new-chat-btn:hover { background: #0369a1; }
+            .new-chat-btn { background: #ffffff; color: #000000; border: none; padding: 10px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 16px; transition: background 0.2s; display: flex; align-items: center; gap: 8px; }
+            .new-chat-btn:hover { background: #e5e5e5; }
             
-            .chats-section-title { font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; margin-bottom: 8px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+            .chats-section-title { font-size: 0.75rem; text-transform: uppercase; color: #737373; margin-bottom: 8px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
             .chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
             
-            .chat-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 6px; cursor: pointer; background: #1f2937; color: #cbd5e1; font-size: 0.9rem; transition: background 0.2s; }
-            .chat-item:hover { background: #374151; color: #fff; }
-            .chat-item.active { background: #0284c7; color: #fff; font-weight: 500; }
+            .chat-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 6px; cursor: pointer; background: #141414; color: #a3a3a3; font-size: 0.9rem; transition: background 0.2s, color 0.2s; }
+            .chat-item:hover { background: #1f1f1f; color: #ffffff; }
+            .chat-item.active { background: #ffffff; color: #000000; font-weight: 500; }
             
             .chat-title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-            .delete-chat-btn { background: transparent; border: none; color: #94a3b8; font-size: 1rem; cursor: pointer; padding: 0 4px; border-radius: 4px; transition: color 0.2s, background 0.2s; }
-            .delete-chat-btn:hover { color: #f87171; background: rgba(255,255,255,0.05); }
+            .delete-chat-btn { background: transparent; border: none; color: #737373; font-size: 1rem; cursor: pointer; padding: 0 4px; border-radius: 4px; transition: color 0.2s, background 0.2s; }
+            .delete-chat-btn:hover { color: #ffffff; background: rgba(255,255,255,0.1); }
 
-            .sidebar-footer { padding-top: 12px; border-top: 1px solid #1f2937; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #38bdf8; font-weight: 500; }
-            .status-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; }
+            .sidebar-footer { padding-top: 12px; border-top: 1px solid #1f1f1f; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #737373; font-weight: 500; }
+            .status-dot { width: 8px; height: 8px; background: #ffffff; border-radius: 50%; }
 
             /* Main Content */
-            .main-content { flex: 1; display: flex; flex-direction: column; background: #0b0f19; }
-            .top-nav { padding: 16px 24px; border-bottom: 1px solid #1f2937; display: flex; justify-content: space-between; align-items: center; background: #111827; }
-            .top-title { font-weight: 600; font-size: 1rem; color: #e2e8f0; display: flex; align-items: center; gap: 12px; }
+            .main-content { flex: 1; display: flex; flex-direction: column; background: #000000; }
+            .top-nav { padding: 16px 24px; border-bottom: 1px solid #1f1f1f; display: flex; justify-content: space-between; align-items: center; background: #0a0a0a; }
+            .top-title { font-weight: 600; font-size: 1rem; color: #e5e5e5; display: flex; align-items: center; gap: 12px; }
             
             /* Status badge animation */
-            .ai-status-badge { font-size: 0.75rem; background: rgba(56, 189, 248, 0.1); color: #38bdf8; padding: 5px 12px; border-radius: 20px; border: 1px solid rgba(56, 189, 248, 0.3); display: none; align-items: center; gap: 8px; font-weight: 600; letter-spacing: 0.5px; }
+            .ai-status-badge { font-size: 0.75rem; background: rgba(255, 255, 255, 0.05); color: #ffffff; padding: 5px 12px; border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.2); display: none; align-items: center; gap: 8px; font-weight: 600; letter-spacing: 0.5px; }
             .ai-status-badge.active { display: inline-flex; animation: pulseBadge 1.5s infinite; }
             
             @keyframes pulseBadge {
-                0% { opacity: 0.6; box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.4); }
-                50% { opacity: 1; border-color: #38bdf8; box-shadow: 0 0 10px rgba(56, 189, 248, 0.2); }
-                100% { opacity: 0.6; box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.4); }
+                0% { opacity: 0.5; box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.2); }
+                50% { opacity: 1; border-color: #ffffff; box-shadow: 0 0 8px rgba(255, 255, 255, 0.1); }
+                100% { opacity: 0.5; box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.2); }
             }
 
-            .clear-btn { background: #1f2937; color: #cbd5e1; border: 1px solid #374151; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s; }
-            .clear-btn:hover { background: #374151; color: #fff; }
+            .clear-btn { background: #141414; color: #a3a3a3; border: 1px solid #262626; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s, color 0.2s; }
+            .clear-btn:hover { background: #1f1f1f; color: #ffffff; }
 
             .chat-messages { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }
             
-            /* Аккуратная компактная и центрированная приветственная карточка */
-            .welcome-card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 18px 24px; text-align: center; max-width: 400px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.2); }
-            .welcome-title { font-weight: 600; font-size: 1rem; color: #e2e8f0; letter-spacing: 0.3px; }
+            /* Аккуратная центрированная карточка */
+            .welcome-card { background: #0a0a0a; border: 1px solid #1f1f1f; border-radius: 12px; padding: 18px 24px; text-align: center; max-width: 400px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+            .welcome-title { font-weight: 600; font-size: 1rem; color: #ffffff; letter-spacing: 0.3px; }
 
             .message { padding: 12px 16px; border-radius: 10px; max-width: 75%; line-height: 1.5; word-break: break-word; font-size: 0.95rem; animation: fadeIn 0.3s ease; align-self: flex-start; }
             @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
-            .message.user { background: #0284c7; color: white; align-self: flex-end; }
-            .message.ai { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; }
+            .message.user { background: #ffffff; color: #000000; align-self: flex-end; font-weight: 500; }
+            .message.ai { background: #111111; color: #e5e5e5; border: 1px solid #262626; }
 
             /* Typing Indicator Animation Box */
-            .typing-indicator { display: none; align-self: flex-start; background: #1e293b; border: 1px solid #334155; padding: 12px 18px; border-radius: 10px; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+            .typing-indicator { display: none; align-self: flex-start; background: #111111; border: 1px solid #262626; padding: 12px 18px; border-radius: 10px; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
             .typing-indicator.active { display: flex; animation: fadeIn 0.3s ease; }
-            .typing-dot { width: 7px; height: 7px; background: #38bdf8; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
+            .typing-dot { width: 7px; height: 7px; background: #ffffff; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
             .typing-dot:nth-child(1) { animation-delay: -0.32s; }
             .typing-dot:nth-child(2) { animation-delay: -0.16s; }
-            .typing-text { font-size: 0.8rem; color: #38bdf8; margin-left: 6px; font-weight: 700; letter-spacing: 0.5px; }
+            .typing-text { font-size: 0.8rem; color: #a3a3a3; margin-left: 6px; font-weight: 700; letter-spacing: 0.5px; }
 
             @keyframes bounce {
                 0%, 80%, 100% { transform: scale(0); }
@@ -96,24 +96,25 @@ async def get_chat_ui():
             }
 
             /* Input Area */
-            .input-container { padding: 20px 24px; background: #0b0f19; }
-            .input-box { background: #111827; border: 1px solid #1f2937; border-radius: 12px; display: flex; align-items: center; padding: 8px 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
-            textarea { flex: 1; background: transparent; border: none; color: white; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 6px; }
-            .send-btn { background: #0284c7; color: white; border: none; padding: 8px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
-            .send-btn:hover { background: #0369a1; }
-            .send-btn:disabled { background: #334155; cursor: not-allowed; opacity: 0.7; }
+            .input-container { padding: 20px 24px; background: #000000; }
+            .input-box { background: #0a0a0a; border: 1px solid #1f1f1f; border-radius: 12px; display: flex; align-items: center; padding: 8px 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+            textarea { flex: 1; background: transparent; border: none; color: #ffffff; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 6px; }
+            textarea::placeholder { color: #525252; }
+            .send-btn { background: #ffffff; color: #000000; border: none; padding: 8px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+            .send-btn:hover { background: #e5e5e5; }
+            .send-btn:disabled { background: #262626; color: #525252; cursor: not-allowed; }
         </style>
     </head>
     <body>
         <div class="sidebar">
             <div class="logo-area">
                 <div class="logo-title">RUBINOVAI</div>
-                <div class="logo-subtitle">PRO WORKSPACE</div>
+                <div class="logo-subtitle">MONOCHROME PRO</div>
             </div>
             <button class="new-chat-btn" onclick="createNewChat()">+ Новый чат</button>
             <div class="chats-section-title">
                 <span>Чаты</span>
-                <span style="font-size: 0.7rem; color: #38bdf8;">Max 5</span>
+                <span style="font-size: 0.7rem; color: #737373;">Max 5</span>
             </div>
             <div id="chatsList" class="chats-list"></div>
             <div class="sidebar-footer">
@@ -127,7 +128,7 @@ async def get_chat_ui():
                 <div class="top-title">
                     <span>Диалоговое окно</span>
                     <div id="aiStatusBadge" class="ai-status-badge">
-                        <div class="typing-dot" style="width: 5px; height: 5px;"></div>
+                        <div class="typing-dot" style="width: 5px; height: 5px; background: #ffffff;"></div>
                         <span>РУБИНОВ АИ ДУМАЕТ...</span>
                     </div>
                 </div>
@@ -159,12 +160,12 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id', activeChatId);
+                localStorage.setItem('rubinovai_chats_mono', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mono', activeChatId);
             }
 
             function renderChats() {
