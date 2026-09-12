@@ -1,5 +1,6 @@
 import os
 import base64
+import json
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -44,6 +45,7 @@ async def generate_title(req: TitleRequest):
 async def chat_endpoint(
     message: str = Form(...),
     mode: str = Form("chat"),
+    history: str = Form("[]"),
     file: UploadFile = File(None)
 ):
     try:
@@ -70,22 +72,37 @@ async def chat_endpoint(
             else:
                 raise HTTPException(status_code=500, detail="Не удалось сгенерировать изображение.")
 
-        contents = []
+        # Превращаем историю в формат SDK google-genai
+        history_list = json.loads(history)
+        formatted_history = []
+        for h in history_list:
+            sdk_role = "user" if h["role"] == "user" else "model"
+            formatted_history.append(
+                types.Content(
+                    role=sdk_role,
+                    parts=[types.Part.from_text(text=h["content"])]
+                )
+            )
+
+        # Создаем чат с учетом истории сообщений
+        chat = client.chats.create(
+            model=CHAT_MODEL,
+            history=formatted_history
+        )
+
+        current_contents = []
         if file:
             file_bytes = await file.read()
-            contents.append(
+            current_contents.append(
                 types.Part.from_bytes(
                     data=file_bytes,
                     mime_type=file.content_type
                 )
             )
         
-        contents.append(message)
+        current_contents.append(message)
 
-        response = client.models.generate_content(
-            model=CHAT_MODEL,
-            contents=contents
-        )
+        response = chat.send_message(current_contents)
 
         return {"response": response.text}
 
@@ -479,9 +496,22 @@ async def get_chat_ui():
                 document.getElementById('sendBtn').disabled = true;
                 container.scrollTop = container.scrollHeight;
 
+                // Собираем историю для передачи на бэкенд
+                let currentHistory = [];
+                if (currentChatId) {
+                    const activeChat = chats.find(c => c.id === currentChatId);
+                    if (activeChat) {
+                        currentHistory = activeChat.messages.map(m => ({
+                            role: m.role,
+                            content: m.content.includes('<img') ? '[Изображение]' : m.content
+                        }));
+                    }
+                }
+
                 const formData = new FormData();
                 formData.append('message', text);
                 formData.append('mode', currentMode);
+                formData.append('history', JSON.stringify(currentHistory));
                 if (fileToSend) {
                     formData.append('file', fileToSend);
                 }
