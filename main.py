@@ -27,68 +27,68 @@ async def get_chat_ui():
         <title>Rubinov-AI Assistant</title>
         <style>
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-            body { background: #000000; color: #f3f4f6; display: flex; height: 100vh; overflow: hidden; }
+            body { background: #000000; color: #d4d4d4; display: flex; height: 100vh; overflow: hidden; }
             
             /* Sidebar */
-            .sidebar { width: 280px; background: #0a0a0a; display: flex; flex-direction: column; border-right: 1px solid #1f1f1f; padding: 16px; }
+            .sidebar { width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; }
             .logo-area { margin-bottom: 24px; }
-            .logo-title { font-size: 1.1rem; font-weight: bold; letter-spacing: 0.5px; color: #ffffff; }
+            .logo-title { font-size: 1.1rem; font-weight: bold; letter-spacing: 0.5px; color: #e0e0e0; }
             .logo-subtitle { font-size: 0.75rem; color: #737373; font-weight: 600; margin-top: 4px; }
             
-            .new-chat-btn { background: #ffffff; color: #000000; border: none; padding: 10px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 16px; transition: background 0.2s; display: flex; align-items: center; gap: 8px; }
-            .new-chat-btn:hover { background: #e5e5e5; }
+            .new-chat-btn { background: #e0e0e0; color: #111111; border: none; padding: 10px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 16px; transition: background 0.2s; display: flex; align-items: center; gap: 8px; }
+            .new-chat-btn:hover { background: #c2c2c2; }
             
-            .chats-section-title { font-size: 0.75rem; text-transform: uppercase; color: #737373; margin-bottom: 8px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+            .chats-section-title { font-size: 0.75rem; text-transform: uppercase; color: #6b6b6b; margin-bottom: 8px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
             .chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
             
-            .chat-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 6px; cursor: pointer; background: #141414; color: #a3a3a3; font-size: 0.9rem; transition: background 0.2s, color 0.2s; }
-            .chat-item:hover { background: #1f1f1f; color: #ffffff; }
-            .chat-item.active { background: #ffffff; color: #000000; font-weight: 500; }
+            .chat-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 6px; cursor: pointer; background: #121212; color: #999999; font-size: 0.9rem; transition: background 0.2s, color 0.2s; }
+            .chat-item:hover { background: #1a1a1a; color: #d4d4d4; }
+            .chat-item.active { background: #d4d4d4; color: #111111; font-weight: 500; }
             
             .chat-title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-            .delete-chat-btn { background: transparent; border: none; color: #737373; font-size: 1rem; cursor: pointer; padding: 0 4px; border-radius: 4px; transition: color 0.2s, background 0.2s; }
-            .delete-chat-btn:hover { color: #ffffff; background: rgba(255,255,255,0.1); }
+            .delete-chat-btn { background: transparent; border: none; color: #6b6b6b; font-size: 1rem; cursor: pointer; padding: 0 4px; border-radius: 4px; transition: color 0.2s, background 0.2s; }
+            .delete-chat-btn:hover { color: #d4d4d4; background: rgba(255,255,255,0.08); }
 
-            .sidebar-footer { padding-top: 12px; border-top: 1px solid #1f1f1f; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #737373; font-weight: 500; }
-            .status-dot { width: 8px; height: 8px; background: #ffffff; border-radius: 50%; }
+            .sidebar-footer { padding-top: 12px; border-top: 1px solid #1a1a1a; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #6b6b6b; font-weight: 500; }
+            .status-dot { width: 8px; height: 8px; background: #b0b0b0; border-radius: 50%; }
 
             /* Main Content */
             .main-content { flex: 1; display: flex; flex-direction: column; background: #000000; }
-            .top-nav { padding: 16px 24px; border-bottom: 1px solid #1f1f1f; display: flex; justify-content: space-between; align-items: center; background: #0a0a0a; }
-            .top-title { font-weight: 600; font-size: 1rem; color: #e5e5e5; display: flex; align-items: center; gap: 12px; }
+            .top-nav { padding: 16px 24px; border-bottom: 1px solid #1a1a1a; display: flex; justify-content: space-between; align-items: center; background: #080808; }
+            .top-title { font-weight: 600; font-size: 1rem; color: #d4d4d4; display: flex; align-items: center; gap: 12px; }
             
             /* Status badge animation */
-            .ai-status-badge { font-size: 0.75rem; background: rgba(255, 255, 255, 0.05); color: #ffffff; padding: 5px 12px; border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.2); display: none; align-items: center; gap: 8px; font-weight: 600; letter-spacing: 0.5px; }
+            .ai-status-badge { font-size: 0.75rem; background: rgba(255, 255, 255, 0.03); color: #cccccc; padding: 5px 12px; border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.15); display: none; align-items: center; gap: 8px; font-weight: 600; letter-spacing: 0.5px; }
             .ai-status-badge.active { display: inline-flex; animation: pulseBadge 1.5s infinite; }
             
             @keyframes pulseBadge {
-                0% { opacity: 0.5; box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.2); }
-                50% { opacity: 1; border-color: #ffffff; box-shadow: 0 0 8px rgba(255, 255, 255, 0.1); }
-                100% { opacity: 0.5; box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.2); }
+                0% { opacity: 0.5; box-shadow: 0 0 0 0 rgba(200, 200, 200, 0.1); }
+                50% { opacity: 1; border-color: #cccccc; box-shadow: 0 0 8px rgba(200, 200, 200, 0.08); }
+                100% { opacity: 0.5; box-shadow: 0 0 0 0 rgba(200, 200, 200, 0.1); }
             }
 
-            .clear-btn { background: #141414; color: #a3a3a3; border: 1px solid #262626; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s, color 0.2s; }
-            .clear-btn:hover { background: #1f1f1f; color: #ffffff; }
+            .clear-btn { background: #121212; color: #999999; border: 1px solid #222222; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s, color 0.2s; }
+            .clear-btn:hover { background: #1a1a1a; color: #d4d4d4; }
 
             .chat-messages { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }
             
             /* Аккуратная центрированная карточка */
-            .welcome-card { background: #0a0a0a; border: 1px solid #1f1f1f; border-radius: 12px; padding: 18px 24px; text-align: center; max-width: 400px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
-            .welcome-title { font-weight: 600; font-size: 1rem; color: #ffffff; letter-spacing: 0.3px; }
+            .welcome-card { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; padding: 18px 24px; text-align: center; max-width: 400px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+            .welcome-title { font-weight: 600; font-size: 1rem; color: #d4d4d4; letter-spacing: 0.3px; }
 
             .message { padding: 12px 16px; border-radius: 10px; max-width: 75%; line-height: 1.5; word-break: break-word; font-size: 0.95rem; animation: fadeIn 0.3s ease; align-self: flex-start; }
             @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
-            .message.user { background: #ffffff; color: #000000; align-self: flex-end; font-weight: 500; }
-            .message.ai { background: #111111; color: #e5e5e5; border: 1px solid #262626; }
+            .message.user { background: #d4d4d4; color: #111111; align-self: flex-end; font-weight: 500; }
+            .message.ai { background: #0e0e0e; color: #cccccc; border: 1px solid #222222; }
 
             /* Typing Indicator Animation Box */
-            .typing-indicator { display: none; align-self: flex-start; background: #111111; border: 1px solid #262626; padding: 12px 18px; border-radius: 10px; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+            .typing-indicator { display: none; align-self: flex-start; background: #0e0e0e; border: 1px solid #222222; padding: 12px 18px; border-radius: 10px; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
             .typing-indicator.active { display: flex; animation: fadeIn 0.3s ease; }
-            .typing-dot { width: 7px; height: 7px; background: #ffffff; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
+            .typing-dot { width: 7px; height: 7px; background: #cccccc; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
             .typing-dot:nth-child(1) { animation-delay: -0.32s; }
             .typing-dot:nth-child(2) { animation-delay: -0.16s; }
-            .typing-text { font-size: 0.8rem; color: #a3a3a3; margin-left: 6px; font-weight: 700; letter-spacing: 0.5px; }
+            .typing-text { font-size: 0.8rem; color: #888888; margin-left: 6px; font-weight: 700; letter-spacing: 0.5px; }
 
             @keyframes bounce {
                 0%, 80%, 100% { transform: scale(0); }
@@ -97,12 +97,12 @@ async def get_chat_ui():
 
             /* Input Area */
             .input-container { padding: 20px 24px; background: #000000; }
-            .input-box { background: #0a0a0a; border: 1px solid #1f1f1f; border-radius: 12px; display: flex; align-items: center; padding: 8px 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-            textarea { flex: 1; background: transparent; border: none; color: #ffffff; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 6px; }
-            textarea::placeholder { color: #525252; }
-            .send-btn { background: #ffffff; color: #000000; border: none; padding: 8px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
-            .send-btn:hover { background: #e5e5e5; }
-            .send-btn:disabled { background: #262626; color: #525252; cursor: not-allowed; }
+            .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; display: flex; align-items: center; padding: 8px 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+            textarea { flex: 1; background: transparent; border: none; color: #d4d4d4; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 6px; }
+            textarea::placeholder { color: #555555; }
+            .send-btn { background: #d4d4d4; color: #111111; border: none; padding: 8px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+            .send-btn:hover { background: #b8b8b8; }
+            .send-btn:disabled { background: #222222; color: #555555; cursor: not-allowed; }
         </style>
     </head>
     <body>
@@ -114,7 +114,7 @@ async def get_chat_ui():
             <button class="new-chat-btn" onclick="createNewChat()">+ Новый чат</button>
             <div class="chats-section-title">
                 <span>Чаты</span>
-                <span style="font-size: 0.7rem; color: #737373;">Max 5</span>
+                <span style="font-size: 0.7rem; color: #6b6b6b;">Max 5</span>
             </div>
             <div id="chatsList" class="chats-list"></div>
             <div class="sidebar-footer">
@@ -128,7 +128,7 @@ async def get_chat_ui():
                 <div class="top-title">
                     <span>Диалоговое окно</span>
                     <div id="aiStatusBadge" class="ai-status-badge">
-                        <div class="typing-dot" style="width: 5px; height: 5px; background: #ffffff;"></div>
+                        <div class="typing-dot" style="width: 5px; height: 5px; background: #cccccc;"></div>
                         <span>РУБИНОВ АИ ДУМАЕТ...</span>
                     </div>
                 </div>
@@ -160,12 +160,12 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v2')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v2')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v3')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v3')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mono_v2', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mono_v2', activeChatId);
+                localStorage.setItem('rubinovai_chats_mono_v3', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mono_v3', activeChatId);
             }
 
             function renderChats() {
