@@ -2,6 +2,8 @@ import os
 import time
 import json
 import uuid
+import io
+import base64
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -12,6 +14,7 @@ from google.genai import types
 app = FastAPI()
 
 SERVER_BUILD_ID = str(uuid.uuid4())[:8]
+IMAGE_GEN_ENABLED = True  # Флаг доступности генерации картинок
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,13 +25,17 @@ app.add_middleware(
 
 client = genai.Client()
 CHAT_MODEL = "gemini-2.0-flash"
+IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
     message: str
 
+class ImageGenRequest(BaseModel):
+    prompt: str
+
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "build_id": SERVER_BUILD_ID}
+    return {"status": "ok", "build_id": SERVER_BUILD_ID, "image_gen_enabled": IMAGE_GEN_ENABLED}
 
 @app.post("/api/title")
 async def generate_title(req: TitleRequest):
@@ -40,6 +47,40 @@ async def generate_title(req: TitleRequest):
         return {"title": response.text.strip().replace('"', '')}
     except Exception as e:
         return {"title": req.message[:20] + "..."}
+
+@app.post("/api/generate-image")
+async def generate_image_endpoint(req: ImageGenRequest):
+    if not IMAGE_GEN_ENABLED:
+        raise HTTPException(status_code=403, detail="Генерация изображений временно отключена администратором.")
+    try:
+        response = client.models.generate_image(
+            model=IMAGEN_MODEL,
+            prompt=req.prompt,
+            config=types.GenerateImageConfig(
+                number_of_images=1,
+                output_mime_type="image/jpeg",
+                aspect_ratio="1:1"
+            )
+        )
+        if not response.generated_images:
+            raise HTTPException(status_code=500, detail="Не удалось получить изображение от модели.")
+        
+        img_obj = response.generated_images[0].image
+        buf = io.BytesIO()
+        if hasattr(img_obj, "save"):
+            img_obj.save(buf, format="JPEG")
+        elif hasattr(img_obj, "_pil_image"):
+            img_obj._pil_image.save(buf, format="JPEG")
+        else:
+            raise HTTPException(status_code=500, detail="Формат ответа изображения не поддерживается.")
+            
+        img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return {"image_url": f"data:image/jpeg;base64,{img_base64}"}
+    except Exception as e:
+        error_msg = str(e)
+        if "not found" in error_msg.lower() or "permission" in error_msg.lower():
+            raise HTTPException(status_code=400, detail="Генерация картинок недоступна на вашем текущем ключе или тарифном плане API.")
+        raise HTTPException(status_code=500, detail=f"Ошибка генерации: {error_msg}")
 
 @app.post("/api/chat")
 async def chat_endpoint(
@@ -92,8 +133,6 @@ async def get_chat_ui():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-        <meta http-equiv="Pragma" content="no-cache">
-        <meta http-equiv="Expires" content="0">
         <title>Rubinov-AI Assistant</title>
         <style>
             * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
@@ -150,6 +189,10 @@ async def get_chat_ui():
             .menu-btn {{ display: none; background: #121212; border: 1px solid #222; color: #b5b5b5; padding: 6px 10px; border-radius: 6px; cursor: pointer; }}
             .top-title {{ font-weight: 600; font-size: 0.95rem; color: #b5b5b5; }}
             
+            .mode-switch {{ display: flex; background: #121212; border: 1px solid #222; border-radius: 16px; padding: 2px; }}
+            .mode-btn {{ background: transparent; border: none; color: #777; padding: 6px 12px; border-radius: 14px; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }}
+            .mode-btn.active {{ background: #262626; color: #fff; }}
+
             .ai-status-badge {{ font-size: 0.7rem; background: rgba(255,255,255,0.03); color: #a6a6a6; padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); display: none; align-items: center; gap: 6px; font-weight: 600; }}
             .ai-status-badge.active {{ display: inline-flex; animation: pulseBadge 1.5s infinite; }}
             @keyframes pulseBadge {{ 0% {{ opacity: 0.5; }} 50% {{ opacity: 1; border-color: #888; }} 100% {{ opacity: 0.5; }} }}
@@ -171,6 +214,7 @@ async def get_chat_ui():
             .message {{ padding: 12px 16px; border-radius: 14px; max-width: 85%; line-height: 1.5; overflow-wrap: break-word; white-space: pre-wrap; font-size: 0.95rem; align-self: flex-start; }}
             .message.user {{ background: #242424 !important; color: #e0e0e0 !important; align-self: flex-end; border: 1px solid #333; }}
             .message.ai {{ background: #0e0e0e; color: #b5b5b5; border: 1px solid #222; }}
+            .message img {{ max-width: 100%; border-radius: 10px; margin-top: 8px; display: block; }}
             
             .file-preview-pill {{ display: inline-flex; align-items: center; gap: 6px; background: #181818; border: 1px solid #333; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; color: #ccc; margin-bottom: 8px; width: fit-content; }}
             .file-preview-pill button {{ background: none; border: none; color: #888; cursor: pointer; font-weight: bold; font-size: 1rem; }}
@@ -199,8 +243,6 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
-        <!-- Плашка создается динамически скриптом, чтобы гарантированно висеть до ответа нового бэкенда -->
-
         <div id="sidebar" class="sidebar">
             <div class="logo-area">
                 <div>
@@ -230,6 +272,10 @@ async def get_chat_ui():
                     <div class="top-title" id="currentChatTitle">Новый диалог</div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px;">
+                    <div class="mode-switch">
+                        <button id="modeChat" class="mode-btn active" onclick="setMode('chat')">💬 Чат</button>
+                        <button id="modeImage" class="mode-btn" onclick="setMode('image')">🎨 Картинка</button>
+                    </div>
                     <div id="aiStatusBadge" class="ai-status-badge">
                         <span style="width: 6px; height: 6px; background: #fff; border-radius: 50%;"></span>
                         ОБРАБОТКА...
@@ -242,13 +288,13 @@ async def get_chat_ui():
                 <div class="welcome-container" id="welcomeContainer">
                     <div class="welcome-card">
                         <div class="welcome-title">Чем я могу помочь сегодня?</div>
-                        <div class="welcome-subtitle">Задайте вопрос или загрузите файл для анализа.</div>
+                        <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключитесь в режим создания картинок.</div>
                     </div>
                     <div class="chips-grid">
                         <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
                         <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
                         <div class="chip" onclick="sendPreset('Составь план продуктивного дня')">📋 План дня</div>
-                        <div class="chip" onclick="sendPreset('Расскажи интересный факт из истории космонавтики')">🚀 Космос</div>
+                        <div class="chip" onclick="sendPreset('Киберпанк город под дождем, неоновые вывески')">🎨 Нарисовать киберпанк</div>
                     </div>
                 </div>
             </div>
@@ -269,7 +315,6 @@ async def get_chat_ui():
         </div>
 
         <script>
-            // Мгновенно создаем плашку обновления прямо при старте скрипта, чтобы она закрывала экран ДО отрисовки
             (function() {{
                 const overlay = document.createElement('div');
                 overlay.id = 'siteUpdateOverlay';
@@ -285,22 +330,29 @@ async def get_chat_ui():
             let chats = JSON.parse(localStorage.getItem('rubinov_chats') || '[]');
             let currentChatId = localStorage.getItem('rubinov_current_id') || null;
             let selectedFile = null;
+            let currentMode = 'chat';
 
-            async function checkServerReady() {
+            function setMode(mode) {{
+                currentMode = mode;
+                document.getElementById('modeChat').classList.toggle('active', mode === 'chat');
+                document.getElementById('modeImage').classList.toggle('active', mode === 'image');
+                const textarea = document.getElementById('userInput');
+                textarea.placeholder = mode === 'image' ? 'Опишите картинку для генерации...' : 'Введите сообщение...';
+            }}
+
+            async function checkServerReady() {{
                 let attempts = 0;
                 while (attempts < 60) {{
                     try {{
                         const res = await fetch('/api/health?t=' + Date.now());
                         if (res.ok) {{
-                            const data = await res.json();
-                            // Проверяем что ответил именно свежий билд (или просто ждем стабильного ответа)
                             setTimeout(() => {{
                                 const overlay = document.getElementById('siteUpdateOverlay');
                                 if (overlay) {{
                                     overlay.classList.add('hidden');
                                     setTimeout(() => overlay.remove(), 500);
                                 }}
-                            }}, 600);
+                            }}, 400);
                             return;
                         }}
                     }} catch (e) {{}}
@@ -312,7 +364,7 @@ async def get_chat_ui():
                     overlay.classList.add('hidden');
                     setTimeout(() => overlay.remove(), 500);
                 }}
-            }
+            }}
 
             window.addEventListener('DOMContentLoaded', () => {{
                 checkServerReady();
@@ -359,6 +411,9 @@ async def get_chat_ui():
 
             function sendPreset(text) {{
                 document.getElementById('userInput').value = text;
+                if (text.includes('Нарисовать')) {{
+                    setMode('image');
+                }}
                 sendMessage();
             }}
 
@@ -370,13 +425,13 @@ async def get_chat_ui():
                     <div class="welcome-container" id="welcomeContainer">
                         <div class="welcome-card">
                             <div class="welcome-title">Чем я могу помочь сегодня?</div>
-                            <div class="welcome-subtitle">Задайте вопрос или загрузите файл для анализа.</div>
+                            <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключитесь в режим создания картинок.</div>
                         </div>
                         <div class="chips-grid">
                             <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
                             <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
                             <div class="chip" onclick="sendPreset('Составь план продуктивного дня')">📋 План дня</div>
-                            <div class="chip" onclick="sendPreset('Расскажи интересный факт из истории космонавтики')">🚀 Космос</div>
+                            <div class="chip" onclick="sendPreset('Киберпанк город под дождем, неоновые вывески')">🎨 Нарисовать киберпанк</div>
                         </div>
                     </div>
                 `;
@@ -461,36 +516,49 @@ async def get_chat_ui():
                 document.getElementById('sendBtn').disabled = true;
                 container.scrollTop = container.scrollHeight;
 
-                let currentHistory = [];
-                if (currentChatId) {{
-                    const activeChat = chats.find(c => c.id === currentChatId);
-                    if (activeChat) {{
-                        currentHistory = activeChat.messages.map(m => ({{
-                            role: m.role,
-                            content: m.content
-                        }}));
-                    }}
-                }}
-
-                const formData = new FormData();
-                formData.append('message', text);
-                formData.append('history', JSON.stringify(currentHistory));
-                if (fileToSend) {{
-                    formData.append('file', fileToSend);
-                }}
-
                 try {{
-                    const res = await fetch('/api/chat', {{
-                        method: 'POST',
-                        body: formData
-                    }});
-                    const data = await res.json();
-                    
-                    if (!res.ok) throw new Error(data.detail || 'Ошибка сервера');
+                    let responseHtml = '';
+
+                    if (currentMode === 'image') {{
+                        const imgRes = await fetch('/api/generate-image', {{
+                            method: 'POST',
+                            headers: {{'Content-Type': 'application/json'}},
+                            body: JSON.stringify({{ prompt: text }})
+                        }});
+                        const imgData = await imgRes.json();
+                        if (!imgRes.ok) throw new Error(imgData.detail || 'Ошибка генерации картинки');
+                        responseHtml = `Сгенерированное изображение по запросу: "${{text}}"<br><img src="${{imgData.image_url}}" alt="Generated Image">`;
+                    }} else {{
+                        let currentHistory = [];
+                        if (currentChatId) {{
+                            const activeChat = chats.find(c => c.id === currentChatId);
+                            if (activeChat) {{
+                                currentHistory = activeChat.messages.map(m => ({{
+                                    role: m.role,
+                                    content: m.content
+                                }}));
+                            }}
+                        }}
+
+                        const formData = new FormData();
+                        formData.append('message', text);
+                        formData.append('history', JSON.stringify(currentHistory));
+                        if (fileToSend) {{
+                            formData.append('file', fileToSend);
+                        }}
+
+                        const res = await fetch('/api/chat', {{
+                            method: 'POST',
+                            body: formData
+                        }});
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || 'Ошибка сервера');
+                        responseHtml = data.response;
+                    }}
 
                     const aiMsgDiv = document.createElement('div');
                     aiMsgDiv.className = 'message ai';
-                    aiMsgDiv.innerHTML = data.response;
+                    aiMsgDiv.innerHTML = responseHtml;
                     container.appendChild(aiMsgDiv);
 
                     if (!currentChatId) {{
@@ -498,15 +566,19 @@ async def get_chat_ui():
                         localStorage.setItem('rubinov_current_id', currentChatId);
                         
                         let chatTitle = text.slice(0, 25) + '...';
-                        try {{
-                            const titleRes = await fetch('/api/title', {{
-                                method: 'POST',
-                                headers: {{'Content-Type': 'application/json'}},
-                                body: JSON.stringify({{ message: text }})
-                            }});
-                            const titleData = await titleRes.json();
-                            if (titleData.title) chatTitle = titleData.title;
-                        }} catch(err) {{}}
+                        if (currentMode === 'chat') {{
+                            try {{
+                                const titleRes = await fetch('/api/title', {{
+                                    method: 'POST',
+                                    headers: {{'Content-Type': 'application/json'}},
+                                    body: JSON.stringify({{ message: text }})
+                                }});
+                                const titleData = await titleRes.json();
+                                if (titleData.title) chatTitle = titleData.title;
+                            }} catch(err) {{}}
+                        }} else {{
+                            chatTitle = '🎨 ' + text.slice(0, 20) + '...';
+                        }}
 
                         document.getElementById('currentChatTitle').innerText = chatTitle;
                         
@@ -515,14 +587,14 @@ async def get_chat_ui():
                             title: chatTitle,
                             messages: [
                                 {{ role: 'user', content: displayContent }},
-                                {{ role: 'ai', content: data.response }}
+                                {{ role: 'ai', content: responseHtml }}
                             ]
                         }});
                     }} else {{
                         const chat = chats.find(c => c.id === currentChatId);
                         if (chat) {{
                             chat.messages.push({{ role: 'user', content: displayContent }});
-                            chat.messages.push({{ role: 'ai', content: data.response }});
+                            chat.messages.push({{ role: 'ai', content: responseHtml }});
                         }}
                     }}
                     localStorage.setItem('rubinov_chats', JSON.stringify(chats));
