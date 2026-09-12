@@ -19,6 +19,11 @@ IMAGE_MODEL = "imagen-3.0-generate-002"
 class TitleRequest(BaseModel):
     message: str
 
+# Эндпоинт для проверки доступности сервера (используется при обновлении/деплое)
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok"}
+
 @app.get("/", response_class=HTMLResponse)
 async def get_chat_ui():
     return """
@@ -32,7 +37,7 @@ async def get_chat_ui():
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             body { background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
-            /* Полноэкранный экран обновления (активен при загрузке) */
+            /* Полноэкранный экран обновления */
             .site-update-overlay {
                 position: fixed;
                 top: 0; left: 0; width: 100%; height: 100%;
@@ -170,8 +175,8 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
-        <!-- Полноэкранный экран обновления -->
-        <div id="siteUpdateOverlay" class="site-update-overlay">
+        <!-- Полноэкранный экран обновления (активен при старте и переподключении) -->
+        <div id="siteUpdateOverlay" class="site-update-overlay active">
             <div class="update-spinner"></div>
             <div class="site-update-title">Сайт на обновлении</div>
             <div class="site-update-subtitle">Выполняется загрузка и обработка данных...</div>
@@ -202,7 +207,7 @@ async def get_chat_ui():
                         <span>Мультимодальный чат</span>
                         <div id="aiStatusBadge" class="ai-status-badge">
                             <div class="update-spinner" style="width: 12px; height: 12px; border-width: 2px;"></div>
-                            <span>ЗАГРУЗКА...</span>
+                            <span>ОБРАБОТКА...</span>
                         </div>
                     </div>
                 </div>
@@ -228,6 +233,30 @@ async def get_chat_ui():
             let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v6')) || [{ id: 1, title: 'Новый чат', history: [] }];
             let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v6')) || chats[0].id;
             let attachedFile = null;
+
+            // Автоматическая проверка доступности сервера при загрузке или обновлении
+            async function checkServerStatus() {
+                const overlay = document.getElementById('siteUpdateOverlay');
+                overlay.classList.add('active'); // Включаем плашку «Сайт на обновлении»
+                
+                let attempts = 0;
+                while (attempts < 60) { // Проверяем до ~1.5 минут
+                    try {
+                        const res = await fetch('/api/health');
+                        if (res.ok) {
+                            overlay.classList.remove('active'); // Сервер поднялся, убираем плашку
+                            return;
+                        }
+                    } catch (e) {
+                        // Сервер еще перезагружается / загружается код
+                    }
+                    await new Promise(r => setTimeout(r, 1500)); // Опрос каждые 1.5 секунды
+                    attempts++;
+                }
+            }
+
+            // Запускаем проверку при открытии страницы
+            window.addEventListener('DOMContentLoaded', checkServerStatus);
 
             function saveState() {
                 localStorage.setItem('rubinovai_chats_mm_v6', JSON.stringify(chats));
@@ -346,7 +375,6 @@ async def get_chat_ui():
 
             function setWorkingState(isWorking) {
                 document.getElementById('aiStatusBadge').classList.toggle('active', isWorking);
-                document.getElementById('siteUpdateOverlay').classList.toggle('active', isWorking);
                 document.getElementById('sendBtn').disabled = isWorking;
                 document.getElementById('messageInput').disabled = isWorking;
             }
@@ -412,6 +440,13 @@ async def get_chat_ui():
 
                 try {
                     const response = await fetch('/api/chat', { method: 'POST', body: formData });
+                    
+                    // Если во время запроса сервер ушел на обновление/перезапуск
+                    if (!response.ok) {
+                        checkServerStatus(); // Включаем плашку обновления и ждем
+                        throw new Error('Сервер перезагружается');
+                    }
+
                     const data = await response.json();
 
                     chat.history.push({
@@ -435,7 +470,7 @@ async def get_chat_ui():
                     }
                 } catch (err) {
                     setWorkingState(false);
-                    chat.history.push({ role: 'ai', text: 'Ошибка связи с сервером.' });
+                    chat.history.push({ role: 'ai', text: 'Ошибка связи с сервером. Возможно, идет обновление.' });
                     saveState();
                     renderChats();
                 }
