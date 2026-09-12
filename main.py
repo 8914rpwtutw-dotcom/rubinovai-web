@@ -337,7 +337,10 @@ async def chat_endpoint(req: ChatRequest):
         formatted_history = []
         for h in req.history[:-1]:
             role = "user" if h["role"] == "user" else "model"
-            formatted_history.append({"role": role, "parts": [h["text"]]})
+            formatted_history.append({
+                "role": role,
+                "parts": [{"text": h["text"]}]
+            })
 
         chat_session = client.chats.create(model=req.model, history=formatted_history)
         response = chat_session.send_message(req.message)
