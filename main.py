@@ -13,7 +13,7 @@ client = genai.Client()
 
 class ChatRequest(BaseModel):
     message: str
-    model: str = "gemini-3.1-pro-preview"
+    model: str = "gemini-3.1-flash-lite"
     history: list = []
 
 @app.get("/", response_class=HTMLResponse)
@@ -72,7 +72,6 @@ async def get_chat_ui():
 
             .chat-messages { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }
             
-            /* Аккуратная центрированная карточка */
             .welcome-card { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; padding: 18px 24px; text-align: center; max-width: 400px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
             .welcome-title { font-weight: 600; font-size: 1rem; color: #d4d4d4; letter-spacing: 0.3px; }
 
@@ -82,7 +81,6 @@ async def get_chat_ui():
             .message.user { background: #d4d4d4; color: #111111; align-self: flex-end; font-weight: 500; }
             .message.ai { background: #0e0e0e; color: #cccccc; border: 1px solid #222222; }
 
-            /* Typing Indicator Animation Box */
             .typing-indicator { display: none; align-self: flex-start; background: #0e0e0e; border: 1px solid #222222; padding: 12px 18px; border-radius: 10px; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
             .typing-indicator.active { display: flex; animation: fadeIn 0.3s ease; }
             .typing-dot { width: 7px; height: 7px; background: #cccccc; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
@@ -95,7 +93,6 @@ async def get_chat_ui():
                 40% { transform: scale(1.15); }
             }
 
-            /* Input Area */
             .input-container { padding: 20px 24px; background: #000000; }
             .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; display: flex; align-items: center; padding: 8px 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
             textarea { flex: 1; background: transparent; border: none; color: #d4d4d4; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 6px; }
@@ -119,7 +116,7 @@ async def get_chat_ui():
             <div id="chatsList" class="chats-list"></div>
             <div class="sidebar-footer">
                 <div class="status-dot"></div>
-                <span>Gemini Active</span>
+                <span>Flash-Lite Active</span>
             </div>
         </div>
 
@@ -141,7 +138,6 @@ async def get_chat_ui():
                 </div>
             </div>
 
-            <!-- Typing indicator element -->
             <div style="padding: 0 24px 12px 24px;">
                 <div id="typingIndicator" class="typing-indicator">
                     <div class="typing-dot"></div>
@@ -160,12 +156,12 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v5')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v5')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v6')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v6')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mono_v5', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mono_v5', activeChatId);
+                localStorage.setItem('rubinovai_chats_mono_v6', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mono_v6', activeChatId);
             }
 
             function renderChats() {
@@ -312,7 +308,7 @@ async def get_chat_ui():
                     const response = await fetch('/api/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: text, model: "gemini-3.1-pro-preview", history: chat.history })
+                        body: JSON.stringify({ message: text, model: "gemini-3.1-flash-lite", history: chat.history })
                     });
                     const data = await response.json();
                     const replyText = data.reply || data.detail || 'Ошибка ответа';
