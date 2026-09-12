@@ -105,7 +105,6 @@ async def get_chat_ui():
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             body { background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
-            /* Плашка "Сайт на обновлении" - активна по умолчанию при открытии страницы */
             .site-update-overlay {
                 position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                 background: #000000; z-index: 99999; display: flex;
@@ -214,7 +213,6 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
-        <!-- Плашка обновления активна при открытии, пока сервер не ответит успехом -->
         <div id="siteUpdateOverlay" class="site-update-overlay">
             <div class="update-spinner"></div>
             <div class="site-update-title">Сайт на обновлении</div>
@@ -296,7 +294,6 @@ async def get_chat_ui():
             let selectedFile = null;
             let isImageMode = false;
 
-            // Циклическая проверка: пока сервер собирается/перезапускается, плашка висит. Как только ответил — исчезает.
             async function checkServerReady() {
                 try {
                     const res = await fetch('/api/health');
