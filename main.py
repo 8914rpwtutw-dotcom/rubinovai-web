@@ -24,7 +24,7 @@ app.add_middleware(
 )
 
 client = genai.Client()
-CHAT_MODEL = "gemini-2.0-flash"
+CHAT_MODEL = "gemini-3.1-flash-lite"
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
@@ -187,7 +187,9 @@ async def get_chat_ui():
             .top-nav {{ padding: 16px 20px; border-bottom: 1px solid #1a1a1a; display: flex; justify-content: space-between; align-items: center; background: #080808; }}
             .top-left-group {{ display: flex; align-items: center; gap: 12px; }}
             .menu-btn {{ display: none; background: #121212; border: 1px solid #222; color: #b5b5b5; padding: 6px 10px; border-radius: 6px; cursor: pointer; }}
+            .top-title-wrapper {{ display: flex; flex-direction: column; gap: 2px; }}
             .top-title {{ font-weight: 600; font-size: 0.95rem; color: #b5b5b5; }}
+            .model-badge {{ font-size: 0.7rem; color: #777; background: #121212; border: 1px solid #222; padding: 2px 8px; border-radius: 10px; width: fit-content; font-weight: 500; }}
             
             .mode-switch {{ display: flex; background: #121212; border: 1px solid #222; border-radius: 16px; padding: 2px; }}
             .mode-btn {{ background: transparent; border: none; color: #777; padding: 6px 12px; border-radius: 14px; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }}
@@ -269,7 +271,10 @@ async def get_chat_ui():
             <div class="top-nav">
                 <div class="top-left-group">
                     <button class="menu-btn" onclick="toggleSidebar()">☰</button>
-                    <div class="top-title" id="currentChatTitle">Новый диалог</div>
+                    <div class="top-title-wrapper">
+                        <div class="top-title" id="currentChatTitle">Новый диалог</div>
+                        <div class="model-badge">⚡ gemini-3.1-flash-lite</div>
+                    </div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <div class="mode-switch">
