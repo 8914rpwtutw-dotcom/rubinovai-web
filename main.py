@@ -17,7 +17,6 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Инициализация клиента Google GenAI
 client = genai.Client()
 
 CHAT_MODEL = "gemini-2.0-flash"
@@ -48,7 +47,6 @@ async def chat_endpoint(
     file: UploadFile = File(None)
 ):
     try:
-        # Превращаем историю в формат SDK google-genai
         history_list = json.loads(history)
         formatted_history = []
         for h in history_list:
@@ -60,7 +58,6 @@ async def chat_endpoint(
                 )
             )
 
-        # Создаем чат с учетом истории сообщений
         chat = client.chats.create(
             model=CHAT_MODEL,
             history=formatted_history
@@ -277,18 +274,23 @@ async def get_chat_ui():
             let selectedFile = null;
 
             async function checkServerReady() {
-                try {
-                    const res = await fetch('/api/health');
-                    if (res.ok) {
-                        setTimeout(() => {
-                            document.getElementById('siteUpdateOverlay').classList.add('hidden');
-                        }, 300);
-                    } else {
-                        setTimeout(checkServerReady, 2000);
-                    }
-                } catch (e) {
-                    setTimeout(checkServerReady, 2000);
+                let attempts = 0;
+                while (attempts < 30) {
+                    try {
+                        const res = await fetch('/api/health');
+                        if (res.ok) {
+                            // Даем небольшую паузу, чтобы интерфейс успел отрисоваться
+                            setTimeout(() => {
+                                document.getElementById('siteUpdateOverlay').classList.add('hidden');
+                            }, 400);
+                            return;
+                        }
+                    } catch (e) {}
+                    attempts++;
+                    await new Promise(r => setTimeout(r, 1000));
                 }
+                // Если сервер долго не отвечает, все равно скрываем плашку через 30 секунд
+                document.getElementById('siteUpdateOverlay').classList.add('hidden');
             }
 
             window.addEventListener('DOMContentLoaded', () => {
