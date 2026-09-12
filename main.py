@@ -516,7 +516,8 @@ async def chat_stream_endpoint(req: ChatRequest):
 
             chat_session = client.chats.create(model=req.model, history=formatted_history)
             
-            async for chunk in await chat_session.send_message_stream(req.message):
+            # Исправлено: убран ошибочный await перед генерацией потока чата
+            for chunk in chat_session.send_message_stream(req.message):
                 if chunk.text:
                     yield chunk.text
         except Exception as e:
