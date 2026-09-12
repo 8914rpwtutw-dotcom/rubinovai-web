@@ -39,17 +39,33 @@ async def get_chat_ui():
             
             .chats-section-title { font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; margin-bottom: 8px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
             .chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
-            .chat-item { padding: 10px 12px; border-radius: 6px; cursor: pointer; background: #1f2937; color: #cbd5e1; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 0.2s; }
+            
+            .chat-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 6px; cursor: pointer; background: #1f2937; color: #cbd5e1; font-size: 0.9rem; transition: background 0.2s; }
             .chat-item:hover { background: #374151; color: #fff; }
             .chat-item.active { background: #0284c7; color: #fff; font-weight: 500; }
             
+            .chat-title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+            .delete-chat-btn { background: transparent; border: none; color: #94a3b8; font-size: 1rem; cursor: pointer; padding: 0 4px; border-radius: 4px; transition: color 0.2s, background 0.2s; }
+            .delete-chat-btn:hover { color: #f87171; background: rgba(255,255,255,0.05); }
+
             .sidebar-footer { padding-top: 12px; border-top: 1px solid #1f2937; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #38bdf8; font-weight: 500; }
             .status-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; }
 
             /* Main Content */
             .main-content { flex: 1; display: flex; flex-direction: column; background: #0b0f19; }
             .top-nav { padding: 16px 24px; border-bottom: 1px solid #1f2937; display: flex; justify-content: space-between; align-items: center; background: #111827; }
-            .top-title { font-weight: 600; font-size: 1rem; color: #e2e8f0; }
+            .top-title { font-weight: 600; font-size: 1rem; color: #e2e8f0; display: flex; align-items: center; gap: 10px; }
+            
+            /* Status badge animation */
+            .ai-status-badge { font-size: 0.75rem; background: #1e293b; color: #38bdf8; padding: 4px 10px; border-radius: 12px; border: 1px solid #334155; display: none; align-items: center; gap: 6px; font-weight: 500; }
+            .ai-status-badge.active { display: inline-flex; animation: pulseBadge 1.5s infinite; }
+            
+            @keyframes pulseBadge {
+                0% { opacity: 0.6; }
+                50% { opacity: 1; border-color: #38bdf8; }
+                100% { opacity: 0.6; }
+            }
+
             .clear-btn { background: #1f2937; color: #cbd5e1; border: 1px solid #374151; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s; }
             .clear-btn:hover { background: #374151; color: #fff; }
 
@@ -59,9 +75,24 @@ async def get_chat_ui():
             .welcome-title { font-weight: bold; font-size: 1.1rem; margin-bottom: 8px; color: #fff; }
             .welcome-desc { color: #94a3b8; font-size: 0.9rem; line-height: 1.4; }
 
-            .message { padding: 12px 16px; border-radius: 10px; max-width: 75%; line-height: 1.5; word-break: break-word; font-size: 0.95rem; }
+            .message { padding: 12px 16px; border-radius: 10px; max-width: 75%; line-height: 1.5; word-break: break-word; font-size: 0.95rem; animation: fadeIn 0.3s ease; }
+            @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
             .message.user { background: #0284c7; color: white; align-self: flex-end; }
             .message.ai { background: #1e293b; color: #f1f5f9; align-self: flex-start; border: 1px solid #334155; }
+
+            /* Typing Indicator Animation Box */
+            .typing-indicator { display: none; align-self: flex-start; background: #1e293b; border: 1px solid #334155; padding: 12px 16px; border-radius: 10px; align-items: center; gap: 6px; }
+            .typing-indicator.active { display: flex; }
+            .typing-dot { width: 7px; height: 7px; background: #38bdf8; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
+            .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+            .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+            .typing-text { font-size: 0.85rem; color: #94a3b8; margin-left: 6px; font-weight: 500; }
+
+            @keyframes bounce {
+                0%, 80%, 100% { transform: scale(0); }
+                40% { transform: scale(1.0); }
+            }
 
             /* Input Area */
             .input-container { padding: 20px 24px; background: #0b0f19; }
@@ -69,6 +100,7 @@ async def get_chat_ui():
             textarea { flex: 1; background: transparent; border: none; color: white; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 6px; }
             .send-btn { background: #0284c7; color: white; border: none; padding: 8px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
             .send-btn:hover { background: #0369a1; }
+            .send-btn:disabled { background: #334155; cursor: not-allowed; opacity: 0.7; }
         </style>
     </head>
     <body>
@@ -91,21 +123,37 @@ async def get_chat_ui():
 
         <div class="main-content">
             <div class="top-nav">
-                <div class="top-title">Диалоговое окно</div>
+                <div class="top-title">
+                    <span>Диалоговое окно</span>
+                    <div id="aiStatusBadge" class="ai-status-badge">
+                        <div class="typing-dot" style="width: 5px; height: 5px;"></div>
+                        <span id="aiStatusText">РУБИНОВ АИ ДУМАЕТ...</span>
+                    </div>
+                </div>
                 <button class="clear-btn" onclick="clearCurrentChat()">🗑️ Очистить чат</button>
             </div>
             
             <div id="messages" class="chat-messages">
                 <div class="welcome-card" id="welcomeCard">
                     <div class="welcome-title">Добро пожаловать в RubinovAi v8.4 🚀</div>
-                    <div class="welcome-desc">Веб-версия успешно запущенна. Задавайте вопросы нейросети. С памятью и историей чатов.</div>
+                    <div class="welcome-desc">Интерактивный интерфейс с анимациями и поддержкой памяти.</div>
+                </div>
+            </div>
+
+            <!-- Typing indicator element -->
+            <div style="padding: 0 24px 12px 24px;">
+                <div id="typingIndicator" class="typing-indicator">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <span class="typing-text">РУБИНОВ АИ ПЕЧАТАЕТ...</span>
                 </div>
             </div>
 
             <div class="input-container">
                 <div class="input-box">
                     <textarea id="messageInput" placeholder="Введите сообщение... (Enter для отправки)" rows="1" onkeydown="handleKeyDown(event)"></textarea>
-                    <button class="send-btn" onclick="sendMessage()">Отправить</button>
+                    <button id="sendBtn" class="send-btn" onclick="sendMessage()">Отправить</button>
                 </div>
             </div>
         </div>
@@ -125,8 +173,23 @@ async def get_chat_ui():
                 chats.forEach(chat => {
                     const div = document.createElement('div');
                     div.className = `chat-item ${chat.id === activeChatId ? 'active' : ''}`;
-                    div.innerText = chat.title;
-                    div.onclick = () => switchChat(chat.id);
+                    
+                    const titleSpan = document.createElement('span');
+                    titleSpan.className = 'chat-title-text';
+                    titleSpan.innerText = chat.title;
+                    titleSpan.onclick = () => switchChat(chat.id);
+                    
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'delete-chat-btn';
+                    deleteBtn.innerHTML = '&times;';
+                    deleteBtn.title = 'Удалить чат';
+                    deleteBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        deleteChat(chat.id);
+                    };
+
+                    div.appendChild(titleSpan);
+                    div.appendChild(deleteBtn);
                     list.appendChild(div);
                 });
                 renderMessages();
@@ -140,7 +203,7 @@ async def get_chat_ui():
                     msgDiv.innerHTML = `
                         <div class="welcome-card">
                             <div class="welcome-title">Добро пожаловать в RubinovAi v8.4 🚀</div>
-                            <div class="welcome-desc">Веб-версия успешно запущенна. Задавайте вопросы нейросети. С памятью и историей чатов.</div>
+                            <div class="welcome-desc">Интерактивный интерфейс с анимациями и поддержкой памяти.</div>
                         </div>`;
                     return;
                 }
@@ -155,6 +218,28 @@ async def get_chat_ui():
                 msgDiv.scrollTop = msgDiv.scrollHeight;
             }
 
+            function setAiWorkingState(isWorking) {
+                const badge = document.getElementById('aiStatusBadge');
+                const indicator = document.getElementById('typingIndicator');
+                const sendBtn = document.getElementById('sendBtn');
+                const textarea = document.getElementById('messageInput');
+
+                if (isWorking) {
+                    badge.classList.add('active');
+                    indicator.classList.add('active');
+                    sendBtn.disabled = true;
+                    textarea.disabled = true;
+                } else {
+                    badge.classList.remove('active');
+                    indicator.classList.remove('active');
+                    sendBtn.disabled = false;
+                    textarea.disabled = false;
+                    textarea.focus();
+                }
+                const msgDiv = document.getElementById('messages');
+                msgDiv.scrollTop = msgDiv.scrollHeight;
+            }
+
             function createNewChat() {
                 if (chats.length >= 5) {
                     alert('Достигнут лимит: максимум 5 чатов.');
@@ -163,6 +248,19 @@ async def get_chat_ui():
                 const newId = Date.now();
                 chats.unshift({ id: newId, title: 'Новый чат', history: [] });
                 activeChatId = newId;
+                saveState();
+                renderChats();
+            }
+
+            function deleteChat(id) {
+                if (chats.length <= 1) {
+                    alert('Нужно оставить хотя бы один чат.');
+                    return;
+                }
+                chats = chats.filter(c => c.id !== id);
+                if (activeChatId === id) {
+                    activeChatId = chats[0].id;
+                }
                 saveState();
                 renderChats();
             }
@@ -206,6 +304,9 @@ async def get_chat_ui():
                 input.value = '';
                 renderChats();
 
+                // Включаем статус анимации думает / печатает
+                setAiWorkingState(true);
+
                 try {
                     const response = await fetch('/api/chat', {
                         method: 'POST',
@@ -220,6 +321,9 @@ async def get_chat_ui():
                 } catch (err) {
                     chat.history.push({ role: 'ai', text: 'Ошибка соединения с сервером.' });
                     renderChats();
+                } finally {
+                    // Выключаем анимации после получения ответа
+                    setAiWorkingState(false);
                 }
             }
 
@@ -232,9 +336,8 @@ async def get_chat_ui():
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):
     try:
-        # Передаем всю историю диалога для сохранения контекста (памяти)
         formatted_history = []
-        for h in req.history[:-1]: # исключаем текущее сообщение, чтобы не дублировать
+        for h in req.history[:-1]:
             role = "user" if h["role"] == "user" else "model"
             formatted_history.append({"role": role, "parts": [h["text"]]})
 
