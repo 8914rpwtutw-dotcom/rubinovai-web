@@ -24,7 +24,7 @@ async def get_chat_ui():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>RubinovAi Pro</title>
+        <title>Rubinov-AI Assistant</title>
         <style>
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             body { background: #000000; color: #f3f4f6; display: flex; height: 100vh; overflow: hidden; }
@@ -108,8 +108,8 @@ async def get_chat_ui():
     <body>
         <div class="sidebar">
             <div class="logo-area">
-                <div class="logo-title">RUBINOVAI</div>
-                <div class="logo-subtitle">MONOCHROME PRO</div>
+                <div class="logo-title">RUBINOV-AI</div>
+                <div class="logo-subtitle">AI ASSISTANT</div>
             </div>
             <button class="new-chat-btn" onclick="createNewChat()">+ Новый чат</button>
             <div class="chats-section-title">
@@ -137,7 +137,7 @@ async def get_chat_ui():
             
             <div id="messages" class="chat-messages">
                 <div class="welcome-card" id="welcomeCard">
-                    <div class="welcome-title">Добро пожаловать в RubinovAi 🚀</div>
+                    <div class="welcome-title">Добро пожаловать в Rubinov-AI 🚀</div>
                 </div>
             </div>
 
@@ -160,12 +160,12 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v2')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v2')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mono', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mono', activeChatId);
+                localStorage.setItem('rubinovai_chats_mono_v2', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mono_v2', activeChatId);
             }
 
             function renderChats() {
@@ -203,7 +203,7 @@ async def get_chat_ui():
                 if (!chat || chat.history.length === 0) {
                     msgDiv.innerHTML = `
                         <div class="welcome-card">
-                            <div class="welcome-title">Добро пожаловать в RubinovAi 🚀</div>
+                            <div class="welcome-title">Добро пожаловать в Rubinov-AI 🚀</div>
                         </div>`;
                     msgDiv.style.justifyContent = 'center';
                     return;
