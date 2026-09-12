@@ -133,6 +133,8 @@ async def get_chat_ui():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+        <meta http-equiv="Pragma" content="no-cache">
+        <meta http-equiv="Expires" content="0">
         <title>Rubinov-AI Assistant</title>
         <style>
             * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
@@ -245,6 +247,12 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
+        <div id="siteUpdateOverlay" class="site-update-overlay">
+            <div class="update-spinner"></div>
+            <div class="site-update-title">Сайт на обновлении</div>
+            <div class="site-update-subtitle">Билд: {SERVER_BUILD_ID} • Инициализация сервера...</div>
+        </div>
+
         <div id="sidebar" class="sidebar">
             <div class="logo-area">
                 <div>
@@ -320,18 +328,6 @@ async def get_chat_ui():
         </div>
 
         <script>
-            (function() {{
-                const overlay = document.createElement('div');
-                overlay.id = 'siteUpdateOverlay';
-                overlay.className = 'site-update-overlay';
-                overlay.innerHTML = `
-                    <div class="update-spinner"></div>
-                    <div class="site-update-title">Сайт на обновлении</div>
-                    <div class="site-update-subtitle">Сборка кода и инициализация сервера...</div>
-                `;
-                document.body.appendChild(overlay);
-            }})();
-
             let chats = JSON.parse(localStorage.getItem('rubinov_chats') || '[]');
             let currentChatId = localStorage.getItem('rubinov_current_id') || null;
             let selectedFile = null;
