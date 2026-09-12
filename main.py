@@ -16,7 +16,7 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Инициализация официального клиента Google GenAI
+# Инициализация клиента Google GenAI
 client = genai.Client()
 
 CHAT_MODEL = "gemini-2.0-flash"
@@ -25,6 +25,7 @@ IMAGE_MODEL = "imagen-3.0-generate-002"
 class TitleRequest(BaseModel):
     message: str
 
+# Эндпоинт проверки здоровья (используется скриптом для скрытия/показа плашки)
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok"}
@@ -43,11 +44,10 @@ async def generate_title(req: TitleRequest):
 @app.post("/api/chat")
 async def chat_endpoint(
     message: str = Form(...),
-    mode: str = Form("chat"), # Режим: "chat" или "image"
+    mode: str = Form("chat"),
     file: UploadFile = File(None)
 ):
     try:
-        # Если выбран режим генерации изображений
         if mode == "image":
             result = client.models.generate_images(
                 model=IMAGE_MODEL,
@@ -71,7 +71,6 @@ async def chat_endpoint(
             else:
                 raise HTTPException(status_code=500, detail="Не удалось сгенерировать изображение.")
 
-        # Обычный текстовый или мультимодальный режим чата
         contents = []
         if file:
             file_bytes = await file.read()
@@ -107,6 +106,7 @@ async def get_chat_ui():
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             body { background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
+            /* Плашка "Сайт на обновлении" */
             .site-update-overlay {
                 position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                 background: #000000; z-index: 99999; display: flex;
@@ -118,7 +118,7 @@ async def get_chat_ui():
                 width: 56px; height: 56px; border: 3px solid rgba(255, 255, 255, 0.1);
                 border-top-color: #ffffff; border-radius: 50%; animation: spin 0.8s linear infinite;
             }
-            .site-update-title { font-size: 1.6rem; font-weight: 800; color: #ffffff; text-transform: uppercase; }
+            .site-update-title { font-size: 1.6rem; font-weight: 800; color: #ffffff; text-transform: uppercase; letter-spacing: 1px; }
             .site-update-subtitle { font-size: 0.95rem; color: #666666; font-weight: 500; }
             @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -216,10 +216,11 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
+        <!-- Плашка обновления при загрузке и сбоях -->
         <div id="siteUpdateOverlay" class="site-update-overlay active">
             <div class="update-spinner"></div>
             <div class="site-update-title">Сайт на обновлении</div>
-            <div class="site-update-subtitle">Инициализация системы...</div>
+            <div class="site-update-subtitle">Выполняется инициализация системы...</div>
         </div>
 
         <div id="sidebar" class="sidebar">
@@ -263,7 +264,7 @@ async def get_chat_ui():
                 <div class="welcome-container" id="welcomeContainer">
                     <div class="welcome-card">
                         <div class="welcome-title">Чем я могу помочь сегодня?</div>
-                        <div class="welcome-subtitle">Задайте вопрос, загрузите файл или включите режим генерации изображений.</div>
+                        <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключите режим для создания картинок.</div>
                     </div>
                     <div class="chips-grid">
                         <div class="chip" onclick="sendPreset('Нарисуй футуристический спорткар на закате', true)">🎨 Сгенерировать спорткар</div>
@@ -278,12 +279,12 @@ async def get_chat_ui():
                 <div class="input-box">
                     <div id="filePreviewArea"></div>
                     <div class="input-row">
-                        <button class="attach-btn" title="Прикрепить файл" onclick="document.getElementById('fileInput').click()">+</button>
+                        <button class="attach-btn" title="Прикрепить файл" onclick="document.getElementById('fileInput').click()">📎</button>
                         <input type="file" id="fileInput" style="display:none" onchange="handleFileSelect(event)">
                         
                         <button id="modeToggleBtn" class="mode-toggle-btn" onclick="toggleImageMode()" title="Переключить режим генерации картинок">💬 Чат</button>
                         
-                        <textarea id="userInput" rows="1" placeholder="Введите сообщение или промпт для картинки..." oninput="autoResize(this)" onkeydown="handleKeyDown(event)"></textarea>
+                        <textarea id="userInput" rows="1" placeholder="Введите сообщение..." oninput="autoResize(this)" onkeydown="handleKeyDown(event)"></textarea>
                         
                         <button id="sendBtn" class="send-btn" onclick="sendMessage()">Отправить</button>
                     </div>
@@ -297,11 +298,15 @@ async def get_chat_ui():
             let selectedFile = null;
             let isImageMode = false;
 
+            // Проверка связи с сервером для плашки обновления
             async function checkServerHealth() {
                 try {
                     const res = await fetch('/api/health');
                     if (res.ok) {
-                        document.getElementById('siteUpdateOverlay').classList.remove('active');
+                        // Плавное скрытие плашки через 0.4 сек для красоты
+                        setTimeout(() => {
+                            document.getElementById('siteUpdateOverlay').classList.remove('active');
+                        }, 400);
                     } else {
                         setTimeout(checkServerHealth, 2000);
                     }
@@ -386,7 +391,7 @@ async def get_chat_ui():
                     <div class="welcome-container" id="welcomeContainer">
                         <div class="welcome-card">
                             <div class="welcome-title">Чем я могу помочь сегодня?</div>
-                            <div class="welcome-subtitle">Задайте вопрос, загрузите файл или включите режим генерации изображений.</div>
+                            <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключите режим для создания картинок.</div>
                         </div>
                         <div class="chips-grid">
                             <div class="chip" onclick="sendPreset('Нарисуй футуристический спорткар на закате', true)">🎨 Сгенерировать спорткар</div>
@@ -398,6 +403,10 @@ async def get_chat_ui():
                 `;
                 renderChatsList();
                 if (window.innerWidth <= 768) toggleSidebar();
+            }
+
+            function clearCurrentChat() {
+                startNewChat();
             }
 
             function renderChatsList() {
@@ -551,4 +560,5 @@ async def get_chat_ui():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
