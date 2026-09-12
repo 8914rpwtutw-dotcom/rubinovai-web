@@ -25,7 +25,6 @@ IMAGE_MODEL = "imagen-3.0-generate-002"
 class TitleRequest(BaseModel):
     message: str
 
-# Эндпоинт проверки здоровья (используется скриптом для скрытия/показа плашки)
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok"}
@@ -106,14 +105,14 @@ async def get_chat_ui():
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             body { background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
-            /* Плашка "Сайт на обновлении" */
+            /* Плашка "Сайт на обновлении" (активна по умолчанию при каждом открытии/обновлении) */
             .site-update-overlay {
                 position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                 background: #000000; z-index: 99999; display: flex;
                 flex-direction: column; align-items: center; justify-content: center;
-                gap: 20px; opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
+                gap: 20px; opacity: 1; pointer-events: auto; transition: opacity 0.5s ease;
             }
-            .site-update-overlay.active { opacity: 1; pointer-events: auto; }
+            .site-update-overlay.hidden { opacity: 0; pointer-events: none; }
             .update-spinner {
                 width: 56px; height: 56px; border: 3px solid rgba(255, 255, 255, 0.1);
                 border-top-color: #ffffff; border-radius: 50%; animation: spin 0.8s linear infinite;
@@ -216,11 +215,11 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
-        <!-- Плашка обновления при загрузке и сбоях -->
-        <div id="siteUpdateOverlay" class="site-update-overlay active">
+        <!-- Плашка обновления появляется при каждой загрузке и висит, пока сервер не ответит -->
+        <div id="siteUpdateOverlay" class="site-update-overlay">
             <div class="update-spinner"></div>
             <div class="site-update-title">Сайт на обновлении</div>
-            <div class="site-update-subtitle">Выполняется инициализация системы...</div>
+            <div class="site-update-subtitle">Внедрение нового кода и инициализация...</div>
         </div>
 
         <div id="sidebar" class="sidebar">
@@ -298,25 +297,26 @@ async def get_chat_ui():
             let selectedFile = null;
             let isImageMode = false;
 
-            // Проверка связи с сервером для плашки обновления
-            async function checkServerHealth() {
+            // Проверка связи с сервером: плашка держится при обновлении/сборке кода, пока сервер не ответит
+            async function checkServerReady() {
                 try {
                     const res = await fetch('/api/health');
                     if (res.ok) {
-                        // Плавное скрытие плашки через 0.4 сек для красоты
+                        // Сервер ответил успешно — плавно убираем плашку
                         setTimeout(() => {
-                            document.getElementById('siteUpdateOverlay').classList.remove('active');
-                        }, 400);
+                            document.getElementById('siteUpdateOverlay').classList.add('hidden');
+                        }, 300);
                     } else {
-                        setTimeout(checkServerHealth, 2000);
+                        // Если сервер еще перезапускается или собирается, повторяем проверку через 1.5 сек
+                        setTimeout(checkServerReady, 1500);
                     }
                 } catch (e) {
-                    setTimeout(checkServerHealth, 2000);
+                    setTimeout(checkServerReady, 1500);
                 }
             }
 
             window.addEventListener('DOMContentLoaded', () => {
-                checkServerHealth();
+                checkServerReady();
                 renderChatsList();
                 if (currentChatId) {
                     loadChat(currentChatId);
