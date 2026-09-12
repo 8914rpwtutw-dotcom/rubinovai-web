@@ -77,8 +77,15 @@ async def get_chat_ui():
 
             .chat-messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }
             
-            .welcome-card { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; padding: 18px 20px; text-align: center; max-width: 400px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
-            .welcome-title { font-weight: 600; font-size: 0.95rem; color: #d4d4d4; letter-spacing: 0.3px; }
+            /* Welcome Area & Starter Chips */
+            .welcome-container { display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 480px; width: 100%; text-align: center; }
+            .welcome-card { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; padding: 18px 20px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+            .welcome-title { font-weight: 600; font-size: 0.95rem; color: #d4d4d4; letter-spacing: 0.3px; margin-bottom: 4px; }
+            .welcome-subtitle { font-size: 0.8rem; color: #6b6b6b; }
+
+            .chips-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+            .chip { background: #0a0a0a; border: 1px solid #1c1c1c; border-radius: 10px; padding: 10px 14px; color: #a3a3a3; font-size: 0.82rem; cursor: pointer; text-align: left; transition: all 0.2s ease; display: flex; align-items: center; gap: 8px; }
+            .chip:hover { background: #141414; border-color: #333333; color: #ffffff; transform: translateY(-1px); }
 
             .message { padding: 12px 16px; border-radius: 10px; max-width: 85%; line-height: 1.5; word-break: break-word; font-size: 0.95rem; animation: fadeIn 0.3s ease; align-self: flex-start; }
             @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
@@ -106,13 +113,13 @@ async def get_chat_ui():
             .send-btn:hover { background: #b8b8b8; }
             .send-btn:disabled { background: #222222; color: #555555; cursor: not-allowed; }
 
-            /* Mobile Responsive Media Query */
             @media (max-width: 768px) {
                 .sidebar { position: absolute; height: 100%; left: 0; top: 0; transform: translateX(-100%); box-shadow: 10px 0 30px rgba(0,0,0,0.8); }
                 .sidebar.open { transform: translateX(0); }
                 .close-sidebar-btn { display: block; }
                 .menu-btn { display: inline-flex; align-items: center; justify-content: center; }
-                .ai-status-badge { display: none !important; } /* Экономим место в шапке телефона */
+                .ai-status-badge { display: none !important; }
+                .chips-grid { grid-template-columns: 1fr; }
             }
         </style>
     </head>
@@ -153,9 +160,7 @@ async def get_chat_ui():
             </div>
             
             <div id="messages" class="chat-messages">
-                <div class="welcome-card" id="welcomeCard">
-                    <div class="welcome-title">Добро пожаловать в Rubinov-AI AI-Assistant 🚀</div>
-                </div>
+                <!-- Заполняется динамически через renderMessages -->
             </div>
 
             <div style="padding: 0 20px 8px 20px;">
@@ -176,12 +181,12 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v7')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v7')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v8')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v8')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mono_v7', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mono_v7', activeChatId);
+                localStorage.setItem('rubinovai_chats_mono_v8', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mono_v8', activeChatId);
             }
 
             function toggleSidebar() {
@@ -201,7 +206,7 @@ async def get_chat_ui():
                     titleSpan.innerText = chat.title;
                     titleSpan.onclick = () => {
                         switchChat(chat.id);
-                        if (window.innerWidth <= 768) toggleSidebar(); // Скрывать меню на телефоне при клике
+                        if (window.innerWidth <= 768) toggleSidebar();
                     };
                     
                     const deleteBtn = document.createElement('button');
@@ -226,8 +231,17 @@ async def get_chat_ui():
                 
                 if (!chat || chat.history.length === 0) {
                     msgDiv.innerHTML = `
-                        <div class="welcome-card">
-                            <div class="welcome-title">Добро пожаловать в Rubinov-AI AI-Assistant 🚀</div>
+                        <div class="welcome-container">
+                            <div class="welcome-card">
+                                <div class="welcome-title">Добро пожаловать в Rubinov-AI 🚀</div>
+                                <div class="welcome-subtitle">Выберите быстрый запрос или напишите свой ниже</div>
+                            </div>
+                            <div class="chips-grid">
+                                <div class="chip" onclick="sendChip('💡 Придумай идею для проекта')">💡 Идея для проекта</div>
+                                <div class="chip" onclick="sendChip('💻 Напиши код на Python / FastAPI')">💻 Код на FastAPI</div>
+                                <div class="chip" onclick="sendChip('✍️ Напиши текст или статью')">✍️ Написать текст</div>
+                                <div class="chip" onclick="sendChip('📊 Объясни сложную концепцию простыми словами')">📊 Объяснить простая вещь</div>
+                            </div>
                         </div>`;
                     msgDiv.style.justifyContent = 'center';
                     return;
@@ -242,6 +256,11 @@ async def get_chat_ui():
                     msgDiv.appendChild(el);
                 });
                 msgDiv.scrollTop = msgDiv.scrollHeight;
+            }
+
+            function sendChip(text) {
+                document.getElementById('messageInput').value = text;
+                sendMessage();
             }
 
             function setAiWorkingState(isWorking) {
@@ -264,6 +283,24 @@ async def get_chat_ui():
                 }
                 const msgDiv = document.getElementById('messages');
                 msgDiv.scrollTop = msgDiv.scrollHeight;
+            }
+
+            // Функция анимации печати (Typewriter effect)
+            function typeWriterEffect(element, text, speed = 12, callback) {
+                let i = 0;
+                element.innerText = '';
+                function type() {
+                    if (i < text.length) {
+                        element.innerText += text.charAt(i);
+                        i++;
+                        const msgDiv = document.getElementById('messages');
+                        msgDiv.scrollTop = msgDiv.scrollHeight;
+                        setTimeout(type, speed);
+                    } else {
+                        if (callback) callback();
+                    }
+                }
+                type();
             }
 
             function createNewChat() {
@@ -341,14 +378,25 @@ async def get_chat_ui():
                     });
                     const data = await response.json();
                     const replyText = data.reply || data.detail || 'Ошибка ответа';
-                    chat.history.push({ role: 'ai', text: replyText });
-                    saveState();
-                    renderChats();
+                    
+                    // Скрываем индикатор «печатает» и создаем пустой блок для ответа ИИ
+                    setAiWorkingState(false);
+                    
+                    const msgDiv = document.getElementById('messages');
+                    const aiElement = document.createElement('div');
+                    aiElement.className = 'message ai';
+                    msgDiv.appendChild(aiElement);
+
+                    // Запускаем эффект печати
+                    typeWriterEffect(aiElement, replyText, 10, () => {
+                        chat.history.push({ role: 'ai', text: replyText });
+                        saveState();
+                    });
+
                 } catch (err) {
+                    setAiWorkingState(false);
                     chat.history.push({ role: 'ai', text: 'Ошибка соединения с сервером.' });
                     renderChats();
-                } finally {
-                    setAiWorkingState(false);
                 }
             }
 
