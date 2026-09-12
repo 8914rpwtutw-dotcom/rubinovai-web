@@ -119,7 +119,8 @@ async def get_chat_ui():
             textarea { flex: 1; background: transparent; border: none; color: #b5b5b5; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 4px 0; }
             textarea::placeholder { color: #4a4a4a; }
             
-            .attach-btn { background: #141414; border: 1px solid #222; color: #aaa; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }
+            /* Принудительный показ кнопки скрепки */
+            .attach-btn { display: flex !important; visibility: visible !important; opacity: 1 !important; background: #141414; border: 1px solid #222; color: #aaa; min-width: 36px; height: 36px; border-radius: 50%; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }
             .attach-btn:hover { background: #222; color: #fff; border-color: #444; }
             
             .send-btn { background: #262626; color: #d0d0d0; border: 1px solid #333; padding: 8px 16px; border-radius: 16px; font-weight: bold; cursor: pointer; font-size: 0.9rem; flex-shrink: 0; }
@@ -193,13 +194,13 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v2')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v2')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v3')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v3')) || chats[0].id;
             let attachedFile = null;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mm_v2', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mm_v2', activeChatId);
+                localStorage.setItem('rubinovai_chats_mm_v3', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mm_v3', activeChatId);
             }
 
             function toggleSidebar() {
@@ -441,26 +442,32 @@ async def chat_endpoint(
             role = "user" if h["role"] == "user" else "model"
             formatted_history.append(types.Content(role=role, parts=[types.Part.from_text(text=h["text"])]))
 
-        chat_session = client.chats.create(model=DEFAULT_MODEL, history=formatted_history)
-
         low_msg = message.lower()
         is_image_request = any(kw in low_msg for kw in ["нарисуй", "сгенерируй картинку", "создай изображение", "картинка с", "нарисовать"])
 
         if is_image_request:
+            # Корректный вызов генерации изображений через Flash Image Preview с responseModalities
             img_response = client.models.generate_content(
                 model=IMAGE_MODEL,
-                contents=message
+                contents=message,
+                config=types.GenerateContentConfig(
+                    response_modalities=["TEXT", "IMAGE"]
+                )
             )
             image_base64 = None
-            for part in img_response.candidates[0].content.parts:
-                if hasattr(part, 'inline_data') and part.inline_data:
-                    image_base64 = base64.b64encode(part.inline_data.data).decode('utf-8')
-                    break
+            reply_text = "Вот что получилось по вашему запросу:"
             
+            if hasattr(img_response, 'candidates') and img_response.candidates:
+                for part in img_response.candidates[0].content.parts:
+                    if hasattr(part, 'inline_data') and part.inline_data:
+                        image_base64 = base64.b64encode(part.inline_data.data).decode('utf-8')
+                    elif hasattr(part, 'text') and part.text:
+                        reply_text = part.text
+
             img_url = f"data:image/png;base64,{image_base64}" if image_base64 else None
-            reply_text = "Вот что получилось по вашему запросу:" if img_url else "Не удалось сгенерировать картинку."
             return {"reply": reply_text, "image_url": img_url}
 
+        chat_session = client.chats.create(model=DEFAULT_MODEL, history=formatted_history)
         content_parts = []
         if file_base64 and file_type:
             file_bytes = base64.b64decode(file_base64)
