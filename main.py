@@ -12,14 +12,17 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 client = genai.Client()
 
+# Используем модель с высокими лимитами
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
+
 class ChatRequest(BaseModel):
     message: str
-    model: str = "gemini-2.5-flash"
+    model: str = DEFAULT_MODEL
     history: list = []
 
 class TitleRequest(BaseModel):
     message: str
-    model: str = "gemini-2.5-flash"
+    model: str = DEFAULT_MODEL
 
 @app.get("/", response_class=HTMLResponse)
 async def get_chat_ui():
@@ -42,13 +45,13 @@ async def get_chat_ui():
             
             .close-sidebar-btn { display: none; background: transparent; border: none; color: #888; font-size: 1.2rem; cursor: pointer; }
 
-            /* Кнопка нового чата с овальным/сквакругленным эффектом при наведении */
+            /* Кнопка нового чата с овальным эффектом при наведении */
             .new-chat-btn { 
                 background: transparent; 
                 color: #d0d0d0; 
                 border: 1px solid #222; 
                 padding: 10px 14px; 
-                border-radius: 20px; /* Делаем овальную форму */
+                border-radius: 20px; 
                 font-weight: 600; 
                 cursor: pointer; 
                 text-align: left; 
@@ -59,7 +62,7 @@ async def get_chat_ui():
                 gap: 8px; 
             }
             .new-chat-btn:hover { 
-                background: #181818; /* Более темный овал при наведении */
+                background: #181818; 
                 border-color: #333333; 
                 color: #ffffff; 
             }
@@ -73,7 +76,7 @@ async def get_chat_ui():
                 align-items: center; 
                 justify-content: space-between; 
                 padding: 10px 14px; 
-                border-radius: 20px; /* Овальная форма */
+                border-radius: 20px; 
                 cursor: pointer; 
                 background: transparent; 
                 color: #8c8c8c; 
@@ -82,11 +85,11 @@ async def get_chat_ui():
                 border: 1px solid transparent;
             }
             .chat-item:hover { 
-                background: #141414; /* Плавный темный овал */
+                background: #141414; 
                 color: #b5b5b5; 
             }
             .chat-item.active { 
-                background: #1c1c1c; /* Активный чат - чуть темнее и выделеннее */
+                background: #1c1c1c; 
                 color: #e0e0e0; 
                 font-weight: 500; 
                 border: 1px solid #282828; 
@@ -247,12 +250,12 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_stream_v2')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_stream_v2')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_stream_v4')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_stream_v4')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_stream_v2', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_stream_v2', activeChatId);
+                localStorage.setItem('rubinovai_chats_stream_v4', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_stream_v4', activeChatId);
             }
 
             function toggleSidebar() {
@@ -402,7 +405,7 @@ async def get_chat_ui():
                     const res = await fetch('/api/title', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: firstMessage, model: "gemini-2.5-flash" })
+                        body: JSON.stringify({ message: firstMessage })
                     });
                     const data = await res.json();
                     if (data.title) {
@@ -445,7 +448,7 @@ async def get_chat_ui():
                     const response = await fetch('/api/chat/stream', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: text, model: "gemini-2.5-flash", history: chat.history })
+                        body: JSON.stringify({ message: text, history: chat.history })
                     });
 
                     if (!response.ok) throw new Error('Ошибка потока');
@@ -516,7 +519,6 @@ async def chat_stream_endpoint(req: ChatRequest):
 
             chat_session = client.chats.create(model=req.model, history=formatted_history)
             
-            # Исправлено: убран ошибочный await перед генерацией потока чата
             for chunk in chat_session.send_message_stream(req.message):
                 if chunk.text:
                     yield chunk.text
