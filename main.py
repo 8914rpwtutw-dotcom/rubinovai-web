@@ -3,7 +3,7 @@ import json
 import base64
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
@@ -101,9 +101,8 @@ async def get_chat_ui():
             .message.ai { background: #0e0e0e; color: #b5b5b5; border: 1px solid #222; }
             .message img { max-width: 100%; border-radius: 8px; margin-top: 8px; display: block; }
             
-            /* Preview attached file */
-            .file-preview-pill { display: inline-flex; align-items: center; gap: 6px; background: #181818; border: 1px solid #333; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; color: #ccc; margin-bottom: 6px; }
-            .file-preview-pill button { background: none; border: none; color: #888; cursor: pointer; font-weight: bold; }
+            .file-preview-pill { display: inline-flex; align-items: center; gap: 6px; background: #181818; border: 1px solid #333; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; color: #ccc; margin-bottom: 8px; width: fit-content; }
+            .file-preview-pill button { background: none; border: none; color: #888; cursor: pointer; font-weight: bold; font-size: 1rem; }
 
             .typing-indicator { display: none; align-self: flex-start; background: #0e0e0e; border: 1px solid #222; padding: 12px 16px; border-radius: 14px; align-items: center; gap: 8px; }
             .typing-indicator.active { display: flex; }
@@ -114,16 +113,16 @@ async def get_chat_ui():
             @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1.15); } }
 
             .input-container { padding: 16px 20px; background: #000; }
-            .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 20px; display: flex; flex-direction: column; padding: 8px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-            .input-row { display: flex; align-items: center; gap: 8px; width: 100%; }
+            .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 20px; display: flex; flex-direction: column; padding: 10px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+            .input-row { display: flex; align-items: center; gap: 10px; width: 100%; }
             
-            textarea { flex: 1; background: transparent; border: none; color: #b5b5b5; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 6px; }
+            textarea { flex: 1; background: transparent; border: none; color: #b5b5b5; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 4px 0; }
             textarea::placeholder { color: #4a4a4a; }
             
-            .attach-btn { background: transparent; border: none; color: #888; font-size: 1.2rem; cursor: pointer; padding: 4px; transition: color 0.2s; }
-            .attach-btn:hover { color: #fff; }
+            .attach-btn { background: #141414; border: 1px solid #222; color: #aaa; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }
+            .attach-btn:hover { background: #222; color: #fff; border-color: #444; }
             
-            .send-btn { background: #262626; color: #d0d0d0; border: 1px solid #333; padding: 8px 16px; border-radius: 16px; font-weight: bold; cursor: pointer; font-size: 0.9rem; }
+            .send-btn { background: #262626; color: #d0d0d0; border: 1px solid #333; padding: 8px 16px; border-radius: 16px; font-weight: bold; cursor: pointer; font-size: 0.9rem; flex-shrink: 0; }
             .send-btn:hover { background: #333333; color: #fff; }
             .send-btn:disabled { background: #161616; color: #444; cursor: not-allowed; }
 
@@ -194,13 +193,13 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v1')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v1')) || chats[0].id;
-            let attachedFile = null; // { name, type, base64 }
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v2')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v2')) || chats[0].id;
+            let attachedFile = null;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mm_v1', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mm_v1', activeChatId);
+                localStorage.setItem('rubinovai_chats_mm_v2', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mm_v2', activeChatId);
             }
 
             function toggleSidebar() {
@@ -237,7 +236,7 @@ async def get_chat_ui():
                 }
                 container.innerHTML = `
                     <div class="file-preview-pill">
-                        <span>📎 ${attachedFile.name}</span>
+                        <span>📎 ${escapeHtml(attachedFile.name)}</span>
                         <button onclick="removeAttachedFile()">&times;</button>
                     </div>
                 `;
@@ -249,7 +248,7 @@ async def get_chat_ui():
                 chats.forEach(chat => {
                     const div = document.createElement('div');
                     div.className = `chat-item ${chat.id === activeChatId ? 'active' : ''}`;
-                    div.innerHTML = `<span class="chat-title-text">${chat.title}</span>`;
+                    div.innerHTML = `<span class="chat-title-text">${escapeHtml(chat.title)}</span>`;
                     div.onclick = () => { switchChat(chat.id); if (window.innerWidth <= 768) toggleSidebar(); };
                     
                     const deleteBtn = document.createElement('button');
@@ -270,8 +269,8 @@ async def get_chat_ui():
                     msgDiv.innerHTML = `
                         <div class="welcome-container">
                             <div class="welcome-card">
-                                <div class="welcome-title">Rubinov-AI с картинками и файлами 🚀</div>
-                                <div class="welcome-subtitle">Спрашивайте текстом, загружайте документы или пишите «Нарисуй котика»</div>
+                                <div class="welcome-title">Rubinov-AI Мультимодальный 🚀</div>
+                                <div class="welcome-subtitle">Нажмите скрепку 📎 для отправки файла или картинки</div>
                             </div>
                             <div class="chips-grid">
                                 <div class="chip" onclick="sendChip('Нарисуй футуристический город ночью')">🎨 Нарисуй город</div>
@@ -289,12 +288,13 @@ async def get_chat_ui():
                 chat.history.forEach(m => {
                     const el = document.createElement('div');
                     el.className = `message ${m.role}`;
-                    let htmlContent = escapeHtml(m.text);
+                    let htmlContent = "";
+                    if (m.fileThumb) {
+                        htmlContent += `<div style="font-size: 0.8rem; color: #888; margin-bottom: 6px; border-bottom: 1px solid #222; padding-bottom: 4px;">📎 Файл: ${escapeHtml(m.fileName)}</div>`;
+                    }
+                    htmlContent += escapeHtml(m.text);
                     if (m.imageUrl) {
                         htmlContent += `<img src="${m.imageUrl}" alt="Сгенерированное изображение">`;
-                    }
-                    if (m.fileThumb) {
-                        htmlContent = `<div style="font-size: 0.8rem; color: #88; margin-bottom: 4px;">📎 [Файл: ${m.fileName}]</div>` + htmlContent;
                     }
                     el.innerHTML = htmlContent;
                     msgDiv.appendChild(el);
@@ -357,7 +357,7 @@ async def get_chat_ui():
                 
                 chat.history.push({
                     role: 'user',
-                    text: text,
+                    text: text || "Проанализируй прикрепленный файл",
                     fileThumb: currentFile ? true : false,
                     fileName: currentFile ? currentFile.name : null
                 });
@@ -370,7 +370,7 @@ async def get_chat_ui():
                 setWorkingState(true);
 
                 const formData = new FormData();
-                formData.append("message", text);
+                formData.append("message", text || "Проанализируй прикрепленный файл");
                 formData.append("history", JSON.stringify(chat.history.slice(0, -1)));
                 if (currentFile) {
                     formData.append("file_base64", currentFile.base64);
@@ -443,12 +443,10 @@ async def chat_endpoint(
 
         chat_session = client.chats.create(model=DEFAULT_MODEL, history=formatted_history)
 
-        # Проверка, просит ли пользователь нарисовать картинку
         low_msg = message.lower()
         is_image_request = any(kw in low_msg for kw in ["нарисуй", "сгенерируй картинку", "создай изображение", "картинка с", "нарисовать"])
 
         if is_image_request:
-            # Генерация изображения
             img_response = client.models.generate_content(
                 model=IMAGE_MODEL,
                 contents=message
@@ -460,10 +458,9 @@ async def chat_endpoint(
                     break
             
             img_url = f"data:image/png;base64,{image_base64}" if image_base64 else None
-            reply_text = "Вот что у меня получилось по вашему запросу:" if img_url else "Не удалось сгенерировать картинку."
+            reply_text = "Вот что получилось по вашему запросу:" if img_url else "Не удалось сгенерировать картинку."
             return {"reply": reply_text, "image_url": img_url}
 
-        # Обработка файлов / изображений, если они прикреплены пользователем
         content_parts = []
         if file_base64 and file_type:
             file_bytes = base64.b64decode(file_base64)
