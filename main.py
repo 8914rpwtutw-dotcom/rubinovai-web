@@ -9,21 +9,104 @@ from google import genai
 from google.genai import types
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# Настройка CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+# Инициализация официального клиента Google GenAI
+# Убедитесь, что у вас установлена переменная окружения GEMINI_API_KEY
 client = genai.Client()
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+# Модели
+CHAT_MODEL = "gemini-2.0-flash"
 IMAGE_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
     message: str
 
-# Эндпоинт для проверки доступности сервера (используется при обновлении/деплое)
+# --- Эндпоинт проверки здоровья ( Healthcheck ) ---
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok"}
 
+# --- Эндпоинт генерации заголовка чата ---
+@app.post("/api/title")
+async def generate_title(req: TitleRequest):
+    try:
+        response = client.models.generate_content(
+            model=CHAT_MODEL,
+            contents=f"Придумай короткое название (не более 3-4 слов, без кавычек) для чата, который начинается с этого сообщения: {req.message}"
+        )
+        return {"title": response.text.strip().replace('"', '')}
+    except Exception as e:
+        return {"title": req.message[:20] + "..."}
+
+# --- Главный эндпоинт чата и генерации картинок ---
+@app.post("/api/chat")
+async def chat_endpoint(
+    message: str = Form(...),
+    file: UploadFile = File(None)
+):
+    try:
+        low_msg = message.lower()
+        
+        # 1. Проверка на запрос генерации изображения
+        is_image_request = any(kw in low_msg for kw in [
+            "нарисуй", "сгенерируй картинку", "создай изображение", 
+            "картинка с", "нарисовать", "создай картинку", "нарисуйте"
+        ])
+
+        if is_image_request:
+            # Запрос к модели Imagen 3
+            result = client.models.generate_images(
+                model=IMAGE_MODEL,
+                prompt=message,
+                config=types.GenerateImagesConfig(
+                    number_of_images=1,
+                    output_mime_type="image/jpeg",
+                    aspect_ratio="1:1",
+                )
+            )
+            
+            if result.generated_images:
+                img_bytes = result.generated_images[0].image.image_bytes
+                encoded_img = base64.b64encode(img_bytes).decode("utf-8")
+                data_url = f"data:image/jpeg;base64,{encoded_img}"
+                
+                reply_text = f"Вот что у меня получилось по вашему запросу:\n{message}"
+                return {
+                    "response": f"{reply_text}\n<img src='{data_url}' alt='Generated Image'/>"
+                }
+
+        # 2. Обработка обычного текстового или мультимодального запроса (с файлом)
+        contents = []
+        if file:
+            file_bytes = await file.read()
+            contents.append(
+                types.Part.from_bytes(
+                    data=file_bytes,
+                    mime_type=file.content_type
+                )
+            )
+        
+        contents.append(message)
+
+        response = client.models.generate_content(
+            model=CHAT_MODEL,
+            contents=contents
+        )
+
+        return {"response": response.text}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Главная страница с веб-интерфейсом ---
 @app.get("/", response_class=HTMLResponse)
 async def get_chat_ui():
     return """
@@ -32,68 +115,40 @@ async def get_chat_ui():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Rubinov-AI Multimodal Assistant</title>
+        <title>Rubinov-AI Multimodal & Image Assistant</title>
         <style>
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             body { background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
-            /* Полноэкранный экран обновления */
+            /* Оверлей загрузки / обновления */
             .site-update-overlay {
-                position: fixed;
-                top: 0; left: 0; width: 100%; height: 100%;
-                background: #000000;
-                z-index: 99999;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                gap: 20px;
-                opacity: 0;
-                pointer-events: none;
-                transition: opacity 0.3s ease;
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                background: #000000; z-index: 99999; display: flex;
+                flex-direction: column; align-items: center; justify-content: center;
+                gap: 20px; opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
             }
-            .site-update-overlay.active {
-                opacity: 1;
-                pointer-events: auto;
-            }
+            .site-update-overlay.active { opacity: 1; pointer-events: auto; }
             .update-spinner {
-                width: 56px;
-                height: 56px;
-                border: 3px solid rgba(255, 255, 255, 0.1);
-                border-top-color: #ffffff;
-                border-radius: 50%;
-                animation: spin 0.8s linear infinite;
+                width: 56px; height: 56px; border: 3px solid rgba(255, 255, 255, 0.1);
+                border-top-color: #ffffff; border-radius: 50%; animation: spin 0.8s linear infinite;
             }
-            .site-update-title {
-                font-size: 1.6rem;
-                font-weight: 800;
-                color: #ffffff;
-                letter-spacing: 1px;
-                text-transform: uppercase;
-            }
-            .site-update-subtitle {
-                font-size: 0.95rem;
-                color: #666666;
-                font-weight: 500;
-            }
-            @keyframes spin {
-                to { transform: rotate(360deg); }
-            }
+            .site-update-title { font-size: 1.6rem; font-weight: 800; color: #ffffff; text-transform: uppercase; }
+            .site-update-subtitle { font-size: 0.95rem; color: #666666; font-weight: 500; }
+            @keyframes spin { to { transform: rotate(360deg); } }
 
             /* Sidebar */
             .sidebar { width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; transition: transform 0.3s ease; z-index: 100; }
             .logo-area { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; padding: 0 8px; }
-            .logo-title { font-size: 1.1rem; font-weight: bold; letter-spacing: 0.5px; color: #cccccc; }
+            .logo-title { font-size: 1.1rem; font-weight: bold; color: #cccccc; }
             .logo-subtitle { font-size: 0.75rem; color: #666666; font-weight: 600; margin-top: 4px; }
-            
             .close-sidebar-btn { display: none; background: transparent; border: none; color: #888; font-size: 1.2rem; cursor: pointer; }
 
             .new-chat-btn { 
                 background: transparent; color: #d0d0d0; border: 1px solid #222; padding: 10px 14px; 
                 border-radius: 20px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 16px; 
-                transition: background 0.2s ease, border-color 0.2s ease; display: flex; align-items: center; gap: 8px; 
+                display: flex; align-items: center; gap: 8px; transition: background 0.2s; 
             }
-            .new-chat-btn:hover { background: #181818; border-color: #333333; color: #ffffff; }
+            .new-chat-btn:hover { background: #181818; color: #fff; border-color: #333; }
             
             .chats-section-title { font-size: 0.75rem; text-transform: uppercase; color: #595959; margin-bottom: 8px; font-weight: bold; padding: 0 8px; }
             .chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
@@ -101,37 +156,32 @@ async def get_chat_ui():
             .chat-item { 
                 display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; 
                 border-radius: 20px; cursor: pointer; background: transparent; color: #8c8c8c; font-size: 0.9rem; 
-                transition: background 0.2s ease, color 0.2s ease; border: 1px solid transparent;
+                border: 1px solid transparent; transition: all 0.2s;
             }
             .chat-item:hover { background: #141414; color: #b5b5b5; }
             .chat-item.active { background: #1c1c1c; color: #e0e0e0; font-weight: 500; border: 1px solid #282828; }
-            
             .chat-title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
             .delete-chat-btn { background: transparent; border: none; color: #595959; font-size: 1rem; cursor: pointer; padding: 2px 6px; border-radius: 50%; }
-            .delete-chat-btn:hover { color: #cccccc; background: rgba(255,255,255,0.08); }
+            .delete-chat-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
 
-            .sidebar-footer { padding: 8px 8px 0 8px; border-top: 1px solid #1a1a1a; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #595959; }
+            .sidebar-footer { padding: 8px; border-top: 1px solid #1a1a1a; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #595959; }
             .status-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; }
 
-            /* Main Content */
-            .main-content { flex: 1; display: flex; flex-direction: column; background: #000000; width: 100%; overflow: hidden; }
+            /* Main Area */
+            .main-content { flex: 1; display: flex; flex-direction: column; background: #000; width: 100%; overflow: hidden; }
             .top-nav { padding: 16px 20px; border-bottom: 1px solid #1a1a1a; display: flex; justify-content: space-between; align-items: center; background: #080808; }
-            
-            .top-left-group { display: flex; align-items: center; gap: 12px; overflow: hidden; }
+            .top-left-group { display: flex; align-items: center; gap: 12px; }
             .menu-btn { display: none; background: #121212; border: 1px solid #222; color: #b5b5b5; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
-
-            .top-title { font-weight: 600; font-size: 0.95rem; color: #b5b5b5; display: flex; align-items: center; gap: 10px; }
+            .top-title { font-weight: 600; font-size: 0.95rem; color: #b5b5b5; }
             
-            .ai-status-badge { font-size: 0.7rem; background: rgba(255, 255, 255, 0.03); color: #a6a6a6; padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.1); display: none; align-items: center; gap: 6px; font-weight: 600; }
+            .ai-status-badge { font-size: 0.7rem; background: rgba(255,255,255,0.03); color: #a6a6a6; padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); display: none; align-items: center; gap: 6px; font-weight: 600; }
             .ai-status-badge.active { display: inline-flex; animation: pulseBadge 1.5s infinite; }
-            
-            @keyframes pulseBadge {
-                0% { opacity: 0.5; } 50% { opacity: 1; border-color: #888; } 100% { opacity: 0.5; }
-            }
+            @keyframes pulseBadge { 0% { opacity: 0.5; } 50% { opacity: 1; border-color: #888; } 100% { opacity: 0.5; } }
 
             .clear-btn { background: #121212; color: #8c8c8c; border: 1px solid #222; padding: 6px 12px; border-radius: 16px; cursor: pointer; font-size: 0.8rem; }
-            .clear-btn:hover { background: #1c1c1c; color: #b5b5b5; }
+            .clear-btn:hover { background: #1c1c1c; color: #fff; }
 
+            /* Messages */
             .chat-messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }
             
             .welcome-container { display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 480px; width: 100%; text-align: center; }
@@ -146,11 +196,12 @@ async def get_chat_ui():
             .message { padding: 12px 16px; border-radius: 14px; max-width: 85%; line-height: 1.5; overflow-wrap: break-word; white-space: pre-wrap; font-size: 0.95rem; align-self: flex-start; }
             .message.user { background: #242424 !important; color: #e0e0e0 !important; align-self: flex-end; border: 1px solid #333; }
             .message.ai { background: #0e0e0e; color: #b5b5b5; border: 1px solid #222; }
-            .message img { max-width: 100%; border-radius: 8px; margin-top: 8px; display: block; }
+            .message img { max-width: 100%; border-radius: 8px; margin-top: 8px; display: block; border: 1px solid #333; }
             
             .file-preview-pill { display: inline-flex; align-items: center; gap: 6px; background: #181818; border: 1px solid #333; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; color: #ccc; margin-bottom: 8px; width: fit-content; }
             .file-preview-pill button { background: none; border: none; color: #888; cursor: pointer; font-weight: bold; font-size: 1rem; }
 
+            /* Input Area */
             .input-container { padding: 16px 20px; background: #000; }
             .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 20px; display: flex; flex-direction: column; padding: 10px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
             .input-row { display: flex; align-items: center; gap: 10px; width: 100%; }
@@ -158,11 +209,11 @@ async def get_chat_ui():
             textarea { flex: 1; background: transparent; border: none; color: #b5b5b5; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 4px 0; }
             textarea::placeholder { color: #4a4a4a; }
             
-            .attach-btn { display: flex !important; visibility: visible !important; opacity: 1 !important; background: #141414; border: 1px solid #222; color: #aaa; min-width: 36px; height: 36px; border-radius: 50%; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }
+            .attach-btn { background: #141414; border: 1px solid #222; color: #aaa; min-width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }
             .attach-btn:hover { background: #222; color: #fff; border-color: #444; }
             
             .send-btn { background: #262626; color: #d0d0d0; border: 1px solid #333; padding: 8px 16px; border-radius: 16px; font-weight: bold; cursor: pointer; font-size: 0.9rem; flex-shrink: 0; }
-            .send-btn:hover { background: #333333; color: #fff; }
+            .send-btn:hover { background: #333; color: #fff; }
             .send-btn:disabled { background: #161616; color: #444; cursor: not-allowed; }
 
             @media (max-width: 768px) {
@@ -175,27 +226,31 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
-        <!-- Полноэкранный экран обновления (активен при старте и переподключении) -->
         <div id="siteUpdateOverlay" class="site-update-overlay active">
             <div class="update-spinner"></div>
             <div class="site-update-title">Сайт на обновлении</div>
-            <div class="site-update-subtitle">Выполняется загрузка и обработка данных...</div>
+            <div class="site-update-subtitle">Выполняется инициализация системы...</div>
         </div>
 
         <div id="sidebar" class="sidebar">
             <div class="logo-area">
                 <div>
                     <div class="logo-title">RUBINOV-AI</div>
-                    <div class="logo-subtitle">MULTIMODAL</div>
+                    <div class="logo-subtitle">MULTIMODAL & IMAGEN 3</div>
                 </div>
-                <button class="close-sidebar-btn" onclick="toggleSidebar()">&times;</button>
+                <button class="close-sidebar-btn" onclick="toggleSidebar()">✕</button>
             </div>
-            <button class="new-chat-btn" onclick="createNewChat()">+ Новый чат</button>
-            <div class="chats-section-title">Чаты</div>
+            
+            <button class="new-chat-btn" onclick="startNewChat()">
+                <span>+</span> Новый чат
+            </button>
+            
+            <div class="chats-section-title">История чатов</div>
             <div id="chatsList" class="chats-list"></div>
+            
             <div class="sidebar-footer">
                 <div class="status-dot"></div>
-                <span>Imagen 3 + Flash Active</span>
+                <span>Система активна</span>
             </div>
         </div>
 
@@ -203,26 +258,41 @@ async def get_chat_ui():
             <div class="top-nav">
                 <div class="top-left-group">
                     <button class="menu-btn" onclick="toggleSidebar()">☰</button>
-                    <div class="top-title">
-                        <span>Мультимодальный чат</span>
-                        <div id="aiStatusBadge" class="ai-status-badge">
-                            <div class="update-spinner" style="width: 12px; height: 12px; border-width: 2px;"></div>
-                            <span>ОБРАБОТКА...</span>
-                        </div>
+                    <div class="top-title" id="currentChatTitle">Новый диалог</div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div id="aiStatusBadge" class="ai-status-badge">
+                        <span style="width: 6px; height: 6px; background: #fff; border-radius: 50%;"></span>
+                        ОБРАБОТКА...
+                    </div>
+                    <button class="clear-btn" onclick="clearCurrentChat()">Очистить</button>
+                </div>
+            </div>
+
+            <div id="chatMessages" class="chat-messages">
+                <div class="welcome-container" id="welcomeContainer">
+                    <div class="welcome-card">
+                        <div class="welcome-title">Чем я могу помочь сегодня?</div>
+                        <div class="welcome-subtitle">Задайте вопрос, загрузите файл или попросите сгенерировать изображение.</div>
+                    </div>
+                    <div class="chips-grid">
+                        <div class="chip" onclick="sendPreset('Нарисуй футуристический спорткар на закате')">🎨 Спорткар на закате</div>
+                        <div class="chip" onclick="sendPreset('Нарисуй волшебный сказочный лес в сумерках с биолюминесцентными растениями')">🌲 Сказочный лес</div>
+                        <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
+                        <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
                     </div>
                 </div>
-                <button class="clear-btn" onclick="clearCurrentChat()">🗑️ Очистить</button>
             </div>
-            
-            <div id="messages" class="chat-messages"></div>
 
             <div class="input-container">
                 <div class="input-box">
-                    <div id="filePreviewContainer"></div>
+                    <div id="filePreviewArea"></div>
                     <div class="input-row">
-                        <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(event)">
-                        <button class="attach-btn" onclick="document.getElementById('fileInput').click()" title="Прикрепить файл или картинку">📎</button>
-                        <textarea id="messageInput" placeholder="Введите сообщение или напишите «нарисуй...»..." rows="1" onkeydown="handleKeyDown(event)"></textarea>
+                        <button class="attach-btn" title="Прикрепить файл" onclick="document.getElementById('fileInput').click()">+</button>
+                        <input type="file" id="fileInput" style="display:none" onchange="handleFileSelect(event)">
+                        
+                        <textarea id="userInput" rows="1" placeholder="Введите сообщение или попросите нарисовать картинку..." oninput="autoResize(this)" onkeydown="handleKeyDown(event)"></textarea>
+                        
                         <button id="sendBtn" class="send-btn" onclick="sendMessage()">Отправить</button>
                     </div>
                 </div>
@@ -230,319 +300,241 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v6')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v6')) || chats[0].id;
-            let attachedFile = null;
+            let chats = JSON.parse(localStorage.getItem('rubinov_chats') || '[]');
+            let currentChatId = localStorage.getItem('rubinov_current_id') || null;
+            let selectedFile = null;
 
-            // Автоматическая проверка доступности сервера при загрузке или обновлении
-            async function checkServerStatus() {
-                const overlay = document.getElementById('siteUpdateOverlay');
-                overlay.classList.add('active'); // Включаем плашку «Сайт на обновлении»
-                
-                let attempts = 0;
-                while (attempts < 60) { // Проверяем до ~1.5 минут
-                    try {
-                        const res = await fetch('/api/health');
-                        if (res.ok) {
-                            overlay.classList.remove('active'); // Сервер поднялся, убираем плашку
-                            return;
-                        }
-                    } catch (e) {
-                        // Сервер еще перезагружается / загружается код
+            async function checkServerHealth() {
+                try {
+                    const res = await fetch('/api/health');
+                    if (res.ok) {
+                        document.getElementById('siteUpdateOverlay').classList.remove('active');
+                    } else {
+                        setTimeout(checkServerHealth, 2000);
                     }
-                    await new Promise(r => setTimeout(r, 1500)); // Опрос каждые 1.5 секунды
-                    attempts++;
+                } catch (e) {
+                    setTimeout(checkServerHealth, 2000);
                 }
             }
 
-            // Запускаем проверку при открытии страницы
-            window.addEventListener('DOMContentLoaded', checkServerStatus);
-
-            function saveState() {
-                localStorage.setItem('rubinovai_chats_mm_v6', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mm_v6', activeChatId);
-            }
+            window.addEventListener('DOMContentLoaded', () => {
+                checkServerHealth();
+                renderChatsList();
+                if (currentChatId) {
+                    loadChat(currentChatId);
+                }
+            });
 
             function toggleSidebar() {
                 document.getElementById('sidebar').classList.toggle('open');
             }
 
-            function handleFileSelect(event) {
-                const file = event.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    const base64String = e.target.result.split(',')[1];
-                    attachedFile = {
-                        name: file.name,
-                        type: file.type,
-                        base64: base64String
-                    };
-                    renderFilePreview();
-                };
-                reader.readAsDataURL(file);
+            function autoResize(textarea) {
+                textarea.style.height = 'auto';
+                textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
             }
 
-            function removeAttachedFile() {
-                attachedFile = null;
-                document.getElementById('fileInput').value = '';
-                renderFilePreview();
-            }
-
-            function renderFilePreview() {
-                const container = document.getElementById('filePreviewContainer');
-                if (!attachedFile) {
-                    container.innerHTML = '';
-                    return;
+            function handleKeyDown(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
                 }
-                container.innerHTML = `
+            }
+
+            function handleFileSelect(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+                selectedFile = file;
+                const previewArea = document.getElementById('filePreviewArea');
+                previewArea.innerHTML = `
                     <div class="file-preview-pill">
-                        <span>📎 ${escapeHtml(attachedFile.name)}</span>
-                        <button onclick="removeAttachedFile()">&times;</button>
+                        <span>📎 ${file.name}</span>
+                        <button onclick="removeFile()">×</button>
                     </div>
                 `;
             }
 
-            function renderChats() {
+            function removeFile() {
+                selectedFile = null;
+                document.getElementById('fileInput').value = '';
+                document.getElementById('filePreviewArea').innerHTML = '';
+            }
+
+            function sendPreset(text) {
+                document.getElementById('userInput').value = text;
+                sendMessage();
+            }
+
+            function startNewChat() {
+                currentChatId = null;
+                localStorage.removeItem('rubinov_current_id');
+                document.getElementById('currentChatTitle').innerText = 'Новый диалог';
+                document.getElementById('chatMessages').innerHTML = `
+                    <div class="welcome-container" id="welcomeContainer">
+                        <div class="welcome-card">
+                            <div class="welcome-title">Чем я могу помочь сегодня?</div>
+                            <div class="welcome-subtitle">Задайте вопрос, загрузите файл или попросите сгенерировать изображение.</div>
+                        </div>
+                        <div class="chips-grid">
+                            <div class="chip" onclick="sendPreset('Нарисуй футуристический спорткар на закате')">🎨 Спорткар на закате</div>
+                            <div class="chip" onclick="sendPreset('Нарисуй волшебный сказочный лес в сумерках с биолюминесцентными растениями')">🌲 Сказочный лес</div>
+                            <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
+                            <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
+                        </div>
+                    </div>
+                `;
+                renderChatsList();
+                if (window.innerWidth <= 768) toggleSidebar();
+            }
+
+            function renderChatsList() {
                 const list = document.getElementById('chatsList');
                 list.innerHTML = '';
                 chats.forEach(chat => {
                     const div = document.createElement('div');
-                    div.className = `chat-item ${chat.id === activeChatId ? 'active' : ''}`;
-                    div.innerHTML = `<span class="chat-title-text">${escapeHtml(chat.title)}</span>`;
-                    div.onclick = () => { switchChat(chat.id); if (window.innerWidth <= 768) toggleSidebar(); };
-                    
-                    const deleteBtn = document.createElement('button');
-                    deleteBtn.className = 'delete-chat-btn';
-                    deleteBtn.innerHTML = '&times;';
-                    deleteBtn.onclick = (e) => { e.stopPropagation(); deleteChat(chat.id); };
-                    div.appendChild(deleteBtn);
+                    div.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
+                    div.innerHTML = `
+                        <span class="chat-title-text" onclick="loadChat('${chat.id}')">${chat.title}</span>
+                        <button class="delete-chat-btn" onclick="deleteChat(event, '${chat.id}')">×</button>
+                    `;
                     list.appendChild(div);
                 });
-                renderMessages();
             }
 
-            function renderMessages() {
-                const msgDiv = document.getElementById('messages');
-                const chat = chats.find(c => c.id === activeChatId);
-                
-                if (!chat || chat.history.length === 0) {
-                    msgDiv.innerHTML = `
-                        <div class="welcome-container">
-                            <div class="welcome-card">
-                                <div class="welcome-title">Rubinov-AI Мультимодальный 🚀</div>
-                                <div class="welcome-subtitle">Нажмите скрепку 📎 или напишите «нарисуй...»</div>
-                            </div>
-                            <div class="chips-grid">
-                                <div class="chip" onclick="sendChip('Нарисуй футуристический спорткар на закате')">🎨 Спорткар на закате</div>
-                                <div class="chip" onclick="sendChip('Объясни код из прикрепленного файла')">📂 Анализ файла</div>
-                                <div class="chip" onclick="sendChip('Напиши план для маркетинговой кампании')">📊 План маркетинга</div>
-                                <div class="chip" onclick="sendChip('Сделай красивую иконку приложения')">✨ Иконка приложения</div>
-                            </div>
-                        </div>`;
-                    msgDiv.style.justifyContent = 'center';
-                    return;
+            function deleteChat(e, id) {
+                e.stopPropagation();
+                chats = chats.filter(c => c.id !== id);
+                localStorage.setItem('rubinov_chats', JSON.stringify(chats));
+                if (currentChatId === id) {
+                    startNewChat();
+                } else {
+                    renderChatsList();
                 }
+            }
 
-                msgDiv.style.justifyContent = 'flex-start';
-                msgDiv.innerHTML = '';
-                chat.history.forEach(m => {
-                    const el = document.createElement('div');
-                    el.className = `message ${m.role}`;
-                    let htmlContent = "";
-                    if (m.fileThumb) {
-                        htmlContent += `<div style="font-size: 0.8rem; color: #888; margin-bottom: 6px; border-bottom: 1px solid #222; padding-bottom: 4px;">📎 Файл: ${escapeHtml(m.fileName)}</div>`;
-                    }
-                    htmlContent += escapeHtml(m.text);
-                    if (m.imageUrl) {
-                        htmlContent += `<img src="${m.imageUrl}" alt="Сгенерированное изображение">`;
-                    }
-                    el.innerHTML = htmlContent;
-                    msgDiv.appendChild(el);
+            function loadChat(id) {
+                const chat = chats.find(c => c.id === id);
+                if (!chat) return;
+                currentChatId = id;
+                localStorage.setItem('rubinov_current_id', id);
+                document.getElementById('currentChatTitle').innerText = chat.title;
+                
+                const container = document.getElementById('chatMessages');
+                container.innerHTML = '';
+                chat.messages.forEach(m => {
+                    const msgDiv = document.createElement('div');
+                    msgDiv.className = `message ${m.role}`;
+                    msgDiv.innerHTML = m.content;
+                    container.appendChild(msgDiv);
                 });
-                msgDiv.scrollTop = msgDiv.scrollHeight;
-            }
-
-            function escapeHtml(text) {
-                if (!text) return '';
-                return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-            }
-
-            function sendChip(text) {
-                document.getElementById('messageInput').value = text;
-                sendMessage();
-            }
-
-            function setWorkingState(isWorking) {
-                document.getElementById('aiStatusBadge').classList.toggle('active', isWorking);
-                document.getElementById('sendBtn').disabled = isWorking;
-                document.getElementById('messageInput').disabled = isWorking;
-            }
-
-            function createNewChat() {
-                if (chats.length >= 5) { alert('Максимум 5 чатов.'); return; }
-                const newId = Date.now();
-                chats.unshift({ id: newId, title: 'Новый чат', history: [] });
-                activeChatId = newId;
-                saveState();
-                renderChats();
+                container.scrollTop = container.scrollHeight;
+                renderChatsList();
                 if (window.innerWidth <= 768) toggleSidebar();
             }
 
-            function deleteChat(id) {
-                if (chats.length <= 1) { alert('Нужно оставить хотя бы один чат.'); return; }
-                chats = chats.filter(c => c.id !== id);
-                if (activeChatId === id) activeChatId = chats[0].id;
-                saveState();
-                renderChats();
-            }
-
-            function switchChat(id) { activeChatId = id; saveState(); renderChats(); }
-            function clearCurrentChat() {
-                const chat = chats.find(c => c.id === activeChatId);
-                if (chat) { chat.history = []; chat.title = 'Новый чат'; saveState(); renderChats(); }
-            }
-            function handleKeyDown(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
-
             async function sendMessage() {
-                const input = document.getElementById('messageInput');
+                const input = document.getElementById('userInput');
                 const text = input.value.trim();
-                if (!text && !attachedFile) return;
+                if (!text && !selectedFile) return;
 
-                let chat = chats.find(c => c.id === activeChatId);
-                if (!chat) return;
+                const welcome = document.getElementById('welcomeContainer');
+                if (welcome) welcome.remove();
 
-                const isFirstMsg = (chat.history.length === 0);
-                const currentFile = attachedFile;
+                const container = document.getElementById('chatMessages');
                 
-                chat.history.push({
-                    role: 'user',
-                    text: text || "Проанализируй прикрепленный файл",
-                    fileThumb: currentFile ? true : false,
-                    fileName: currentFile ? currentFile.name : null
-                });
+                // Отображение сообщения пользователя
+                const userMsgDiv = document.createElement('div');
+                userMsgDiv.className = 'message user';
+                let displayContent = text;
+                if (selectedFile) {
+                    displayContent = `[Файл: ${selectedFile.name}]<br>` + displayContent;
+                }
+                userMsgDiv.innerHTML = displayContent;
+                container.appendChild(userMsgDiv);
 
                 input.value = '';
-                attachedFile = null;
-                document.getElementById('fileInput').value = '';
-                renderFilePreview();
-                renderChats();
-                setWorkingState(true);
+                input.style.height = 'auto';
+                const fileToSend = selectedFile;
+                removeFile();
+
+                // Показываем индикатор обработки
+                document.getElementById('aiStatusBadge').classList.add('active');
+                document.getElementById('sendBtn').disabled = true;
+                container.scrollTop = container.scrollHeight;
 
                 const formData = new FormData();
-                formData.append("message", text || "Проанализируй прикрепленный файл");
-                formData.append("history", JSON.stringify(chat.history.slice(0, -1)));
-                if (currentFile) {
-                    formData.append("file_base64", currentFile.base64);
-                    formData.append("file_name", currentFile.name);
-                    formData.append("file_type", currentFile.type);
+                formData.append('message', text);
+                if (fileToSend) {
+                    formData.append('file', fileToSend);
                 }
 
                 try {
-                    const response = await fetch('/api/chat', { method: 'POST', body: formData });
-                    
-                    // Если во время запроса сервер ушел на обновление/перезапуск
-                    if (!response.ok) {
-                        checkServerStatus(); // Включаем плашку обновления и ждем
-                        throw new Error('Сервер перезагружается');
-                    }
-
-                    const data = await response.json();
-
-                    chat.history.push({
-                        role: 'ai',
-                        text: data.reply,
-                        imageUrl: data.image_url || null
+                    const res = await fetch('/api/chat', {
+                        method: 'POST',
+                        body: formData
                     });
+                    const data = await res.json();
+                    
+                    if (!res.ok) throw new Error(data.detail || 'Ошибка сервера');
 
-                    saveState();
-                    setWorkingState(false);
-                    renderChats();
+                    const aiMsgDiv = document.createElement('div');
+                    aiMsgDiv.className = 'message ai';
+                    aiMsgDiv.innerHTML = data.response;
+                    container.appendChild(aiMsgDiv);
 
-                    if (isFirstMsg && text) {
-                        fetch('/api/title', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({message: text})
-                        }).then(r => r.json()).then(d => {
-                            if (d.title) { chat.title = d.title; saveState(); renderChats(); }
+                    // Сохранение в историю чатов
+                    if (!currentChatId) {
+                        currentChatId = 'chat_' + Date.now();
+                        localStorage.setItem('rubinov_current_id', currentChatId);
+                        
+                        let chatTitle = text.slice(0, 25) + '...';
+                        try {
+                            const titleRes = await fetch('/api/title', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({ message: text })
+                            });
+                            const titleData = await titleRes.json();
+                            if (titleData.title) chatTitle = titleData.title;
+                        } catch(err) {}
+
+                        document.getElementById('currentChatTitle').innerText = chatTitle;
+                        
+                        chats.unshift({
+                            id: currentChatId,
+                            title: chatTitle,
+                            messages: [
+                                { role: 'user', content: displayContent },
+                                { role: 'ai', content: data.response }
+                            ]
                         });
+                    } else {
+                        const chat = chats.find(c => c.id === currentChatId);
+                        if (chat) {
+                            chat.messages.push({ role: 'user', content: displayContent });
+                            chat.messages.push({ role: 'ai', content: data.response });
+                        }
                     }
+                    localStorage.setItem('rubinov_chats', JSON.stringify(chats));
+                    renderChatsList();
+
                 } catch (err) {
-                    setWorkingState(false);
-                    chat.history.push({ role: 'ai', text: 'Ошибка связи с сервером. Возможно, идет обновление.' });
-                    saveState();
-                    renderChats();
+                    const errDiv = document.createElement('div');
+                    errDiv.className = 'message ai';
+                    errDiv.style.color = '#ef4444';
+                    errDiv.innerText = 'Ошибка: ' + err.message;
+                    container.appendChild(errDiv);
+                } finally {
+                    document.getElementById('aiStatusBadge').classList.remove('active');
+                    document.getElementById('sendBtn').disabled = false;
+                    container.scrollTop = container.scrollHeight;
                 }
             }
-            renderChats();
         </script>
     </body>
     </html>
     """
 
-@app.post("/api/title")
-async def generate_title(req: TitleRequest):
-    try:
-        response = client.models.generate_content(
-            model=DEFAULT_MODEL,
-            contents=f"Придумай краткое название (3-4 слова, без кавычек) для чата по теме: «{req.message}»"
-        )
-        title = response.text.strip().replace('"', '').replace("'", "")
-        return {"title": title[:30]}
-    except:
-        return {"title": "Диалог"}
-
-@app.post("/api/chat")
-async def chat_endpoint(
-    message: str = Form(...),
-    history: str = Form("[]"),
-    file_base64: str = Form(None),
-    file_name: str = Form(None),
-    file_type: str = Form(None)
-):
-    try:
-        hist_list = json.loads(history)
-        low_msg = message.lower()
-        is_image_request = any(kw in low_msg for kw in ["нарисуй", "сгенерируй картинку", "создай изображение", "картинка с", "нарисовать"])
-
-        if is_image_request:
-            result = client.models.generate_images(
-                model=IMAGE_MODEL,
-                prompt=message,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    output_mime_type="image/jpeg",
-                    aspect_ratio="1:1",
-                )
-            )
-            
-            img_url = None
-            if result.generated_images:
-                img_bytes = result.generated_images[0].image.image_bytes
-                b64_img = base64.b64encode(img_bytes).decode('utf-8')
-                img_url = f"data:image/jpeg;base64,{b64_img}"
-
-            reply_text = "Вот что у меня получилось по вашему запросу:" if img_url else "Не удалось сгенерировать изображение."
-            return {"reply": reply_text, "image_url": img_url}
-
-        formatted_history = []
-        for h in hist_list:
-            role = "user" if h["role"] == "user" else "model"
-            formatted_history.append(types.Content(role=role, parts=[types.Part.from_text(text=h["text"])]))
-
-        chat_session = client.chats.create(model=DEFAULT_MODEL, history=formatted_history)
-        
-        content_parts = []
-        if file_base64 and file_type:
-            file_bytes = base64.b64decode(file_base64)
-            content_parts.append(types.Part.from_bytes(data=file_bytes, mime_type=file_type))
-        
-        if message:
-            content_parts.append(types.Part.from_text(text=message))
-
-        response = chat_session.send_message(content_parts)
-        return {"reply": response.text, "image_url": None}
-
-    except Exception as e:
-        return {"reply": f"Ошибка обработки запроса: {str(e)}", "image_url": None}
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)
