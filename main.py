@@ -1,14 +1,18 @@
 import os
-import base64
+import time
 import json
+import uuid
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
 
 app = FastAPI()
+
+# Уникальный ID текущего запуска сервера (меняется при каждом перезапуске/деплое)
+SERVER_BUILD_ID = str(uuid.uuid4())[:8]
 
 app.add_middleware(
     CORSMiddleware,
@@ -18,7 +22,6 @@ app.add_middleware(
 )
 
 client = genai.Client()
-
 CHAT_MODEL = "gemini-2.0-flash"
 
 class TitleRequest(BaseModel):
@@ -26,7 +29,7 @@ class TitleRequest(BaseModel):
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "build_id": SERVER_BUILD_ID}
 
 @app.post("/api/title")
 async def generate_title(req: TitleRequest):
@@ -74,7 +77,6 @@ async def chat_endpoint(
             )
         
         current_contents.append(message)
-
         response = chat.send_message(current_contents)
 
         return {"response": response.text}
@@ -84,121 +86,124 @@ async def chat_endpoint(
 
 @app.get("/", response_class=HTMLResponse)
 async def get_chat_ui():
-    return """
+    html_content = f"""
     <!DOCTYPE html>
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+        <meta http-equiv="Pragma" content="no-cache">
+        <meta http-equiv="Expires" content="0">
         <title>Rubinov-AI Assistant</title>
         <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-            body { background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }
+            * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+            body {{ background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }}
             
-            .site-update-overlay {
+            .site-update-overlay {{
                 position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                 background: #000000; z-index: 99999; display: flex;
                 flex-direction: column; align-items: center; justify-content: center;
                 gap: 20px; opacity: 1; pointer-events: auto; transition: opacity 0.5s ease;
-            }
-            .site-update-overlay.hidden { opacity: 0; pointer-events: none; }
-            .update-spinner {
+            }}
+            .site-update-overlay.hidden {{ opacity: 0; pointer-events: none; }}
+            .update-spinner {{
                 width: 56px; height: 56px; border: 3px solid rgba(255, 255, 255, 0.1);
                 border-top-color: #ffffff; border-radius: 50%; animation: spin 0.8s linear infinite;
-            }
-            .site-update-title { font-size: 1.6rem; font-weight: 800; color: #ffffff; text-transform: uppercase; letter-spacing: 1px; }
-            .site-update-subtitle { font-size: 0.95rem; color: #666666; font-weight: 500; text-align: center; padding: 0 20px; }
-            @keyframes spin { to { transform: rotate(360deg); } }
+            }}
+            .site-update-title {{ font-size: 1.6rem; font-weight: 800; color: #ffffff; text-transform: uppercase; letter-spacing: 1px; }}
+            .site-update-subtitle {{ font-size: 0.95rem; color: #666666; font-weight: 500; text-align: center; padding: 0 20px; }}
+            @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
 
-            .sidebar { width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; transition: transform 0.3s ease; z-index: 100; }
-            .logo-area { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; padding: 0 8px; }
-            .logo-title { font-size: 1.1rem; font-weight: bold; color: #cccccc; }
-            .logo-subtitle { font-size: 0.75rem; color: #666666; font-weight: 600; margin-top: 4px; }
-            .close-sidebar-btn { display: none; background: transparent; border: none; color: #888; font-size: 1.2rem; cursor: pointer; }
+            .sidebar {{ width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; transition: transform 0.3s ease; z-index: 100; }}
+            .logo-area {{ margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; padding: 0 8px; }}
+            .logo-title {{ font-size: 1.1rem; font-weight: bold; color: #cccccc; }}
+            .logo-subtitle {{ font-size: 0.75rem; color: #666666; font-weight: 600; margin-top: 4px; }}
+            .close-sidebar-btn {{ display: none; background: transparent; border: none; color: #888; font-size: 1.2rem; cursor: pointer; }}
 
-            .new-chat-btn { 
+            .new-chat-btn {{ 
                 background: transparent; color: #d0d0d0; border: 1px solid #222; padding: 10px 14px; 
                 border-radius: 20px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 16px; 
                 display: flex; align-items: center; gap: 8px; transition: background 0.2s; 
-            }
-            .new-chat-btn:hover { background: #181818; color: #fff; border-color: #333; }
+            }}
+            .new-chat-btn:hover {{ background: #181818; color: #fff; border-color: #333; }}
             
-            .chats-section-title { font-size: 0.75rem; text-transform: uppercase; color: #595959; margin-bottom: 8px; font-weight: bold; padding: 0 8px; }
-            .chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
+            .chats-section-title {{ font-size: 0.75rem; text-transform: uppercase; color: #595959; margin-bottom: 8px; font-weight: bold; padding: 0 8px; }}
+            .chats-list {{ flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }}
             
-            .chat-item { 
+            .chat-item {{ 
                 display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; 
                 border-radius: 20px; cursor: pointer; background: transparent; color: #8c8c8c; font-size: 0.9rem; 
                 border: 1px solid transparent; transition: all 0.2s;
-            }
-            .chat-item:hover { background: #141414; color: #b5b5b5; }
-            .chat-item.active { background: #1c1c1c; color: #e0e0e0; font-weight: 500; border: 1px solid #282828; }
-            .chat-title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-            .delete-chat-btn { background: transparent; border: none; color: #595959; font-size: 1rem; cursor: pointer; padding: 2px 6px; border-radius: 50%; }
-            .delete-chat-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
+            }}
+            .chat-item:hover {{ background: #141414; color: #b5b5b5; }}
+            .chat-item.active {{ background: #1c1c1c; color: #e0e0e0; font-weight: 500; border: 1px solid #282828; }}
+            .chat-title-text {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }}
+            .delete-chat-btn {{ background: transparent; border: none; color: #595959; font-size: 1rem; cursor: pointer; padding: 2px 6px; border-radius: 50%; }}
+            .delete-chat-btn:hover {{ color: #fff; background: rgba(255,255,255,0.08); }}
 
-            .sidebar-footer { padding: 8px; border-top: 1px solid #1a1a1a; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #595959; }
-            .status-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; }
+            .sidebar-footer {{ padding: 8px; border-top: 1px solid #1a1a1a; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #595959; }}
+            .status-dot {{ width: 8px; height: 8px; background: #22c55e; border-radius: 50%; }}
 
-            .main-content { flex: 1; display: flex; flex-direction: column; background: #000; width: 100%; overflow: hidden; }
-            .top-nav { padding: 16px 20px; border-bottom: 1px solid #1a1a1a; display: flex; justify-content: space-between; align-items: center; background: #080808; }
-            .top-left-group { display: flex; align-items: center; gap: 12px; }
-            .menu-btn { display: none; background: #121212; border: 1px solid #222; color: #b5b5b5; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
-            .top-title { font-weight: 600; font-size: 0.95rem; color: #b5b5b5; }
+            .main-content {{ flex: 1; display: flex; flex-direction: column; background: #000; width: 100%; overflow: hidden; }}
+            .top-nav {{ padding: 16px 20px; border-bottom: 1px solid #1a1a1a; display: flex; justify-content: space-between; align-items: center; background: #080808; }}
+            .top-left-group {{ display: flex; align-items: center; gap: 12px; }}
+            .menu-btn {{ display: none; background: #121212; border: 1px solid #222; color: #b5b5b5; padding: 6px 10px; border-radius: 6px; cursor: pointer; }}
+            .top-title {{ font-weight: 600; font-size: 0.95rem; color: #b5b5b5; }}
             
-            .ai-status-badge { font-size: 0.7rem; background: rgba(255,255,255,0.03); color: #a6a6a6; padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); display: none; align-items: center; gap: 6px; font-weight: 600; }
-            .ai-status-badge.active { display: inline-flex; animation: pulseBadge 1.5s infinite; }
-            @keyframes pulseBadge { 0% { opacity: 0.5; } 50% { opacity: 1; border-color: #888; } 100% { opacity: 0.5; } }
+            .ai-status-badge {{ font-size: 0.7rem; background: rgba(255,255,255,0.03); color: #a6a6a6; padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); display: none; align-items: center; gap: 6px; font-weight: 600; }}
+            .ai-status-badge.active {{ display: inline-flex; animation: pulseBadge 1.5s infinite; }}
+            @keyframes pulseBadge {{ 0% {{ opacity: 0.5; }} 50% {{ opacity: 1; border-color: #888; }} 100% {{ opacity: 0.5; }} }}
 
-            .clear-btn { background: #121212; color: #8c8c8c; border: 1px solid #222; padding: 6px 12px; border-radius: 16px; cursor: pointer; font-size: 0.8rem; }
-            .clear-btn:hover { background: #1c1c1c; color: #fff; }
+            .clear-btn {{ background: #121212; color: #8c8c8c; border: 1px solid #222; padding: 6px 12px; border-radius: 16px; cursor: pointer; font-size: 0.8rem; }}
+            .clear-btn:hover {{ background: #1c1c1c; color: #fff; }}
 
-            .chat-messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }
+            .chat-messages {{ flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }}
             
-            .welcome-container { display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 480px; width: 100%; text-align: center; }
-            .welcome-card { background: #080808; border: 1px solid #1a1a1a; border-radius: 16px; padding: 18px 20px; width: 100%; }
-            .welcome-title { font-weight: 600; font-size: 0.95rem; color: #cccccc; margin-bottom: 4px; }
-            .welcome-subtitle { font-size: 0.8rem; color: #595959; }
+            .welcome-container {{ display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 480px; width: 100%; text-align: center; }}
+            .welcome-card {{ background: #080808; border: 1px solid #1a1a1a; border-radius: 16px; padding: 18px 20px; width: 100%; }}
+            .welcome-title {{ font-weight: 600; font-size: 0.95rem; color: #cccccc; margin-bottom: 4px; }}
+            .welcome-subtitle {{ font-size: 0.8rem; color: #595959; }}
 
-            .chips-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
-            .chip { background: #0a0a0a; border: 1px solid #1c1c1c; border-radius: 16px; padding: 10px 14px; color: #8c8c8c; font-size: 0.82rem; cursor: pointer; text-align: left; transition: all 0.2s; display: flex; align-items: center; gap: 8px; }
-            .chip:hover { background: #161616; border-color: #333; color: #ccc; }
+            .chips-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }}
+            .chip {{ background: #0a0a0a; border: 1px solid #1c1c1c; border-radius: 16px; padding: 10px 14px; color: #8c8c8c; font-size: 0.82rem; cursor: pointer; text-align: left; transition: all 0.2s; display: flex; align-items: center; gap: 8px; }}
+            .chip:hover {{ background: #161616; border-color: #333; color: #ccc; }}
 
-            .message { padding: 12px 16px; border-radius: 14px; max-width: 85%; line-height: 1.5; overflow-wrap: break-word; white-space: pre-wrap; font-size: 0.95rem; align-self: flex-start; }
-            .message.user { background: #242424 !important; color: #e0e0e0 !important; align-self: flex-end; border: 1px solid #333; }
-            .message.ai { background: #0e0e0e; color: #b5b5b5; border: 1px solid #222; }
+            .message {{ padding: 12px 16px; border-radius: 14px; max-width: 85%; line-height: 1.5; overflow-wrap: break-word; white-space: pre-wrap; font-size: 0.95rem; align-self: flex-start; }}
+            .message.user {{ background: #242424 !important; color: #e0e0e0 !important; align-self: flex-end; border: 1px solid #333; }}
+            .message.ai {{ background: #0e0e0e; color: #b5b5b5; border: 1px solid #222; }}
             
-            .file-preview-pill { display: inline-flex; align-items: center; gap: 6px; background: #181818; border: 1px solid #333; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; color: #ccc; margin-bottom: 8px; width: fit-content; }
-            .file-preview-pill button { background: none; border: none; color: #888; cursor: pointer; font-weight: bold; font-size: 1rem; }
+            .file-preview-pill {{ display: inline-flex; align-items: center; gap: 6px; background: #181818; border: 1px solid #333; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; color: #ccc; margin-bottom: 8px; width: fit-content; }}
+            .file-preview-pill button {{ background: none; border: none; color: #888; cursor: pointer; font-weight: bold; font-size: 1rem; }}
 
-            .input-container { padding: 16px 20px; background: #000; }
-            .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 20px; display: flex; flex-direction: column; padding: 10px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-            .input-row { display: flex; align-items: center; gap: 10px; width: 100%; }
+            .input-container {{ padding: 16px 20px; background: #000; }}
+            .input-box {{ background: #080808; border: 1px solid #1a1a1a; border-radius: 20px; display: flex; flex-direction: column; padding: 10px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }}
+            .input-row {{ display: flex; align-items: center; gap: 10px; width: 100%; }}
             
-            textarea { flex: 1; background: transparent; border: none; color: #b5b5b5; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 4px 0; }
-            textarea::placeholder { color: #4a4a4a; }
+            textarea {{ flex: 1; background: transparent; border: none; color: #b5b5b5; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 4px 0; }}
+            textarea::placeholder {{ color: #4a4a4a; }}
 
-            .attach-btn { background: #141414; border: 1px solid #222; color: #aaa; min-width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }
-            .attach-btn:hover { background: #222; color: #fff; border-color: #444; }
+            .attach-btn {{ background: #141414; border: 1px solid #222; color: #aaa; min-width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }}
+            .attach-btn:hover {{ background: #222; color: #fff; border-color: #444; }}
             
-            .send-btn { background: #262626; color: #d0d0d0; border: 1px solid #333; padding: 8px 16px; border-radius: 16px; font-weight: bold; cursor: pointer; font-size: 0.9rem; flex-shrink: 0; }
-            .send-btn:hover { background: #333; color: #fff; }
-            .send-btn:disabled { background: #161616; color: #444; cursor: not-allowed; }
+            .send-btn {{ background: #262626; color: #d0d0d0; border: 1px solid #333; padding: 8px 16px; border-radius: 16px; font-weight: bold; cursor: pointer; font-size: 0.9rem; flex-shrink: 0; }}
+            .send-btn:hover {{ background: #333; color: #fff; }}
+            .send-btn:disabled {{ background: #161616; color: #444; cursor: not-allowed; }}
 
-            @media (max-width: 768px) {
-                .sidebar { position: absolute; height: 100%; left: 0; top: 0; transform: translateX(-100%); }
-                .sidebar.open { transform: translateX(0); }
-                .close-sidebar-btn { display: block; }
-                .menu-btn { display: inline-flex; }
-                .chips-grid { grid-template-columns: 1fr; }
-            }
+            @media (max-width: 768px) {{
+                .sidebar {{ position: absolute; height: 100%; left: 0; top: 0; transform: translateX(-100%); }}
+                .sidebar.open {{ transform: translateX(0); }}
+                .close-sidebar-btn {{ display: block; }}
+                .menu-btn {{ display: inline-flex; }}
+                .chips-grid {{ grid-template-columns: 1fr; }}
+            }}
         </style>
     </head>
     <body>
         <div id="siteUpdateOverlay" class="site-update-overlay">
             <div class="update-spinner"></div>
             <div class="site-update-title">Сайт на обновлении</div>
-            <div class="site-update-subtitle">Внедрение нового кода и инициализация сервера...</div>
+            <div class="site-update-subtitle">Сборка кода и инициализация сервера...</div>
         </div>
 
         <div id="sidebar" class="sidebar">
@@ -275,73 +280,73 @@ async def get_chat_ui():
 
             async function checkServerReady() {
                 let attempts = 0;
-                while (attempts < 30) {
-                    try {
-                        const res = await fetch('/api/health');
-                        if (res.ok) {
-                            // Даем небольшую паузу, чтобы интерфейс успел отрисоваться
-                            setTimeout(() => {
+                while (attempts < 60) {{
+                    try {{
+                        const res = await fetch('/api/health?t=' + Date.now());
+                        if (res.ok) {{
+                            const data = await res.json();
+                            // Ждем пока сервер ответит и даем дополнительную паузу на завершение сборки
+                            setTimeout(() => {{
                                 document.getElementById('siteUpdateOverlay').classList.add('hidden');
-                            }, 400);
+                            }}, 800);
                             return;
-                        }
-                    } catch (e) {}
+                        }}
+                    }} catch (e) {{}}
                     attempts++;
                     await new Promise(r => setTimeout(r, 1000));
-                }
-                // Если сервер долго не отвечает, все равно скрываем плашку через 30 секунд
+                }}
                 document.getElementById('siteUpdateOverlay').classList.add('hidden');
             }
 
-            window.addEventListener('DOMContentLoaded', () => {
+            window.addEventListener('DOMContentLoaded', () => {{
                 checkServerReady();
                 renderChatsList();
-                if (currentChatId) {
+                if (currentChatId) {{
                     loadChat(currentChatId);
-                }
-            });
+                }}
+            }});
 
-            function toggleSidebar() {
+            function toggleSidebar() {{
                 document.getElementById('sidebar').classList.toggle('open');
-            }
+            }}
 
-            function autoResize(textarea) {
+            function autoResize(textarea) {{
                 textarea.style.height = 'auto';
                 textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
-            }
+            }}
 
-            function handleKeyDown(e) {
-                if (e.key === 'Enter' && !e.shiftKey) {
+            function handleKeyDown(e) {{
+                if (e.key === 'Enter' && !e.shiftKey) {{
                     e.preventDefault();
                     sendMessage();
-                }
-            }
+                }}
+            }}
 
-            function handleFileSelect(e) {
+            function handleFileSelect(e) {{
                 const file = e.target.files[0];
                 if (!file) return;
                 selectedFile = file;
                 const previewArea = document.getElementById('filePreviewArea');
                 previewArea.innerHTML = `
                     <div class="file-preview-pill">
-                        <span>📎 ${file.name}</span>
+                        <span>📎 ${{file.name}}</span>
                         <button onclick="removeFile()">×</button>
                     </div>
                 `;
-            }
+            }}
 
-            function removeFile() {
+            function removeFile() {{
                 selectedFile = null;
                 document.getElementById('fileInput').value = '';
                 document.getElementById('filePreviewArea').innerHTML = '';
-            }
+            }}
 
-            function sendPreset(text) {
+            function sendPreset(text) {{
                 document.getElementById('userInput').value = text;
                 sendMessage();
-            }
+            }}
 
-            function startNewChat() {
+            function startNewChat() {{
                 currentChatId = null;
                 localStorage.removeItem('rubinov_current_id');
                 document.getElementById('currentChatTitle').innerText = 'Новый диалог';
@@ -361,38 +366,38 @@ async def get_chat_ui():
                 `;
                 renderChatsList();
                 if (window.innerWidth <= 768) toggleSidebar();
-            }
+            }}
 
-            function clearCurrentChat() {
+            function clearCurrentChat() {{
                 startNewChat();
-            }
+            }}
 
-            function renderChatsList() {
+            function renderChatsList() {{
                 const list = document.getElementById('chatsList');
                 list.innerHTML = '';
-                chats.forEach(chat => {
+                chats.forEach(chat => {{
                     const div = document.createElement('div');
-                    div.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
+                    div.className = `chat-item ${{chat.id === currentChatId ? 'active' : ''}}`;
                     div.innerHTML = `
-                        <span class="chat-title-text" onclick="loadChat('${chat.id}')">${chat.title}</span>
-                        <button class="delete-chat-btn" onclick="deleteChat(event, '${chat.id}')">×</button>
+                        <span class="chat-title-text" onclick="loadChat('${{chat.id}}')">${{chat.title}}</span>
+                        <button class="delete-chat-btn" onclick="deleteChat(event, '${{chat.id}}')">×</button>
                     `;
                     list.appendChild(div);
                 });
-            }
+            }}
 
-            function deleteChat(e, id) {
+            function deleteChat(e, id) {{
                 e.stopPropagation();
                 chats = chats.filter(c => c.id !== id);
                 localStorage.setItem('rubinov_chats', JSON.stringify(chats));
-                if (currentChatId === id) {
+                if (currentChatId === id) {{
                     startNewChat();
-                } else {
+                }} else {{
                     renderChatsList();
-                }
-            }
+                }}
+            }}
 
-            function loadChat(id) {
+            function loadChat(id) {{
                 const chat = chats.find(c => c.id === id);
                 if (!chat) return;
                 currentChatId = id;
@@ -401,18 +406,18 @@ async def get_chat_ui():
                 
                 const container = document.getElementById('chatMessages');
                 container.innerHTML = '';
-                chat.messages.forEach(m => {
+                chat.messages.forEach(m => {{
                     const msgDiv = document.createElement('div');
-                    msgDiv.className = `message ${m.role}`;
+                    msgDiv.className = `message ${{m.role}}`;
                     msgDiv.innerHTML = m.content;
                     container.appendChild(msgDiv);
-                });
+                }});
                 container.scrollTop = container.scrollHeight;
                 renderChatsList();
                 if (window.innerWidth <= 768) toggleSidebar();
-            }
+            }}
 
-            async function sendMessage() {
+            async function sendMessage() {{
                 const input = document.getElementById('userInput');
                 const text = input.value.trim();
                 if (!text && !selectedFile) return;
@@ -425,9 +430,9 @@ async def get_chat_ui():
                 const userMsgDiv = document.createElement('div');
                 userMsgDiv.className = 'message user';
                 let displayContent = text;
-                if (selectedFile) {
-                    displayContent = `[Файл: ${selectedFile.name}]<br>` + displayContent;
-                }
+                if (selectedFile) {{
+                    displayContent = `[Файл: ${{selectedFile.name}}]<br>` + displayContent;
+                }}
                 userMsgDiv.innerHTML = displayContent;
                 container.appendChild(userMsgDiv);
 
@@ -441,28 +446,28 @@ async def get_chat_ui():
                 container.scrollTop = container.scrollHeight;
 
                 let currentHistory = [];
-                if (currentChatId) {
+                if (currentChatId) {{
                     const activeChat = chats.find(c => c.id === currentChatId);
-                    if (activeChat) {
-                        currentHistory = activeChat.messages.map(m => ({
+                    if (activeChat) {{
+                        currentHistory = activeChat.messages.map(m => ({{
                             role: m.role,
                             content: m.content
-                        }));
-                    }
-                }
+                        }}));
+                    }}
+                }}
 
                 const formData = new FormData();
                 formData.append('message', text);
                 formData.append('history', JSON.stringify(currentHistory));
-                if (fileToSend) {
+                if (fileToSend) {{
                     formData.append('file', fileToSend);
-                }
+                }}
 
-                try {
-                    const res = await fetch('/api/chat', {
+                try {{
+                    const res = await fetch('/api/chat', {{
                         method: 'POST',
                         body: formData
-                    });
+                    }});
                     const data = await res.json();
                     
                     if (!res.ok) throw new Error(data.detail || 'Ошибка сервера');
@@ -472,57 +477,62 @@ async def get_chat_ui():
                     aiMsgDiv.innerHTML = data.response;
                     container.appendChild(aiMsgDiv);
 
-                    if (!currentChatId) {
+                    if (!currentChatId) {{
                         currentChatId = 'chat_' + Date.now();
                         localStorage.setItem('rubinov_current_id', currentChatId);
                         
                         let chatTitle = text.slice(0, 25) + '...';
-                        try {
-                            const titleRes = await fetch('/api/title', {
+                        try {{
+                            const titleRes = await fetch('/api/title', {{
                                 method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({ message: text })
-                            });
+                                headers: {{'Content-Type': 'application/json'}},
+                                body: JSON.stringify({{ message: text }})
+                            }});
                             const titleData = await titleRes.json();
                             if (titleData.title) chatTitle = titleData.title;
-                        } catch(err) {}
+                        }} catch(err) {{}}
 
                         document.getElementById('currentChatTitle').innerText = chatTitle;
                         
-                        chats.unshift({
+                        chats.unshift({{
                             id: currentChatId,
                             title: chatTitle,
                             messages: [
-                                { role: 'user', content: displayContent },
-                                { role: 'ai', content: data.response }
+                                {{ role: 'user', content: displayContent }},
+                                {{ role: 'ai', content: data.response }}
                             ]
-                        });
-                    } else {
+                        }});
+                    }} else {{
                         const chat = chats.find(c => c.id === currentChatId);
-                        if (chat) {
-                            chat.messages.push({ role: 'user', content: displayContent });
-                            chat.messages.push({ role: 'ai', content: data.response });
-                        }
-                    }
+                        if (chat) {{
+                            chat.messages.push({{ role: 'user', content: displayContent }});
+                            chat.messages.push({{ role: 'ai', content: data.response }});
+                        }}
+                    }}
                     localStorage.setItem('rubinov_chats', JSON.stringify(chats));
                     renderChatsList();
 
-                } catch (err) {
+                }} catch (err) {{
                     const errDiv = document.createElement('div');
                     errDiv.className = 'message ai';
                     errDiv.style.color = '#ef4444';
                     errDiv.innerText = 'Ошибка: ' + err.message;
                     container.appendChild(errDiv);
-                } finally {
+                }} finally {{
                     document.getElementById('aiStatusBadge').classList.remove('active');
                     document.getElementById('sendBtn').disabled = false;
                     container.scrollTop = container.scrollHeight;
-                }
-            }
+                }}
+            }}
         </script>
     </body>
     </html>
     """
+    return HTMLResponse(content=html_content, headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+    })
 
 if __name__ == "__main__":
     import uvicorn
