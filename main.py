@@ -13,12 +13,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 client = genai.Client()
 
-DEFAULT_MODEL = "gemini-3.1-flash-lite"
-IMAGE_MODEL = "gemini-3.1-flash-image-preview"
+DEFAULT_MODEL = "gemini-2.5-flash"
+IMAGE_MODEL = "imagen-3.0-generate-002"  # Официальная модель для генерации картинок
 
 class TitleRequest(BaseModel):
     message: str
-    model: str = DEFAULT_MODEL
 
 @app.get("/", response_class=HTMLResponse)
 async def get_chat_ui():
@@ -119,7 +118,6 @@ async def get_chat_ui():
             textarea { flex: 1; background: transparent; border: none; color: #b5b5b5; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 4px 0; }
             textarea::placeholder { color: #4a4a4a; }
             
-            /* Принудительный показ кнопки скрепки */
             .attach-btn { display: flex !important; visibility: visible !important; opacity: 1 !important; background: #141414; border: 1px solid #222; color: #aaa; min-width: 36px; height: 36px; border-radius: 50%; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }
             .attach-btn:hover { background: #222; color: #fff; border-color: #444; }
             
@@ -150,7 +148,7 @@ async def get_chat_ui():
             <div id="chatsList" class="chats-list"></div>
             <div class="sidebar-footer">
                 <div class="status-dot"></div>
-                <span>Flash-Lite + Images Active</span>
+                <span>Imagen 3 + Flash Active</span>
             </div>
         </div>
 
@@ -194,13 +192,13 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v3')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v3')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v4')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v4')) || chats[0].id;
             let attachedFile = null;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mm_v3', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mm_v3', activeChatId);
+                localStorage.setItem('rubinovai_chats_mm_v4', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mm_v4', activeChatId);
             }
 
             function toggleSidebar() {
@@ -271,10 +269,10 @@ async def get_chat_ui():
                         <div class="welcome-container">
                             <div class="welcome-card">
                                 <div class="welcome-title">Rubinov-AI Мультимодальный 🚀</div>
-                                <div class="welcome-subtitle">Нажмите скрепку 📎 для отправки файла или картинки</div>
+                                <div class="welcome-subtitle">Нажмите скрепку 📎 или напишите «нарисуй...»</div>
                             </div>
                             <div class="chips-grid">
-                                <div class="chip" onclick="sendChip('Нарисуй футуристический город ночью')">🎨 Нарисуй город</div>
+                                <div class="chip" onclick="sendChip('Нарисуй футуристический спорткар на закате')">🎨 Спорткар на закате</div>
                                 <div class="chip" onclick="sendChip('Объясни код из прикрепленного файла')">📂 Анализ файла</div>
                                 <div class="chip" onclick="sendChip('Напиши план для маркетинговой кампании')">📊 План маркетинга</div>
                                 <div class="chip" onclick="sendChip('Сделай красивую иконку приложения')">✨ Иконка приложения</div>
@@ -437,37 +435,38 @@ async def chat_endpoint(
 ):
     try:
         hist_list = json.loads(history)
+        low_msg = message.lower()
+        is_image_request = any(kw in low_msg for kw in ["нарисуй", "сгенерируй картинку", "создай изображение", "картинка с", "нарисовать"])
+
+        if is_image_request:
+            # Прямой вызов генерации изображения через Imagen 3
+            result = client.models.generate_images(
+                model=IMAGE_MODEL,
+                prompt=message,
+                config=types.GenerateImagesConfig(
+                    number_of_images=1,
+                    output_mime_type="image/jpeg",
+                    aspect_ratio="1:1",
+                )
+            )
+            
+            img_url = None
+            if result.generated_images:
+                img_bytes = result.generated_images[0].image.image_bytes
+                b64_img = base64.b64encode(img_bytes).decode('utf-8')
+                img_url = f"data:image/jpeg;base64,{b64_img}"
+
+            reply_text = "Вот что у меня получилось по вашему запросу:" if img_url else "Не удалось сгенерировать изображение."
+            return {"reply": reply_text, "image_url": img_url}
+
+        # Обычный текстовый или мультимодальный чат через Gemini Flash
         formatted_history = []
         for h in hist_list:
             role = "user" if h["role"] == "user" else "model"
             formatted_history.append(types.Content(role=role, parts=[types.Part.from_text(text=h["text"])]))
 
-        low_msg = message.lower()
-        is_image_request = any(kw in low_msg for kw in ["нарисуй", "сгенерируй картинку", "создай изображение", "картинка с", "нарисовать"])
-
-        if is_image_request:
-            # Корректный вызов генерации изображений через Flash Image Preview с responseModalities
-            img_response = client.models.generate_content(
-                model=IMAGE_MODEL,
-                contents=message,
-                config=types.GenerateContentConfig(
-                    response_modalities=["TEXT", "IMAGE"]
-                )
-            )
-            image_base64 = None
-            reply_text = "Вот что получилось по вашему запросу:"
-            
-            if hasattr(img_response, 'candidates') and img_response.candidates:
-                for part in img_response.candidates[0].content.parts:
-                    if hasattr(part, 'inline_data') and part.inline_data:
-                        image_base64 = base64.b64encode(part.inline_data.data).decode('utf-8')
-                    elif hasattr(part, 'text') and part.text:
-                        reply_text = part.text
-
-            img_url = f"data:image/png;base64,{image_base64}" if image_base64 else None
-            return {"reply": reply_text, "image_url": img_url}
-
         chat_session = client.chats.create(model=DEFAULT_MODEL, history=formatted_history)
+        
         content_parts = []
         if file_base64 and file_type:
             file_bytes = base64.b64decode(file_base64)
