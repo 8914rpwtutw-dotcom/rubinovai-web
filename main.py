@@ -54,16 +54,16 @@ async def get_chat_ui():
             /* Main Content */
             .main-content { flex: 1; display: flex; flex-direction: column; background: #0b0f19; }
             .top-nav { padding: 16px 24px; border-bottom: 1px solid #1f2937; display: flex; justify-content: space-between; align-items: center; background: #111827; }
-            .top-title { font-weight: 600; font-size: 1rem; color: #e2e8f0; display: flex; align-items: center; gap: 10px; }
+            .top-title { font-weight: 600; font-size: 1rem; color: #e2e8f0; display: flex; align-items: center; gap: 12px; }
             
             /* Status badge animation */
-            .ai-status-badge { font-size: 0.75rem; background: #1e293b; color: #38bdf8; padding: 4px 10px; border-radius: 12px; border: 1px solid #334155; display: none; align-items: center; gap: 6px; font-weight: 500; }
+            .ai-status-badge { font-size: 0.75rem; background: rgba(56, 189, 248, 0.1); color: #38bdf8; padding: 5px 12px; border-radius: 20px; border: 1px solid rgba(56, 189, 248, 0.3); display: none; align-items: center; gap: 8px; font-weight: 600; letter-spacing: 0.5px; }
             .ai-status-badge.active { display: inline-flex; animation: pulseBadge 1.5s infinite; }
             
             @keyframes pulseBadge {
-                0% { opacity: 0.6; }
-                50% { opacity: 1; border-color: #38bdf8; }
-                100% { opacity: 0.6; }
+                0% { opacity: 0.6; box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.4); }
+                50% { opacity: 1; border-color: #38bdf8; box-shadow: 0 0 10px rgba(56, 189, 248, 0.2); }
+                100% { opacity: 0.6; box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.4); }
             }
 
             .clear-btn { background: #1f2937; color: #cbd5e1; border: 1px solid #374151; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s; }
@@ -82,16 +82,16 @@ async def get_chat_ui():
             .message.ai { background: #1e293b; color: #f1f5f9; align-self: flex-start; border: 1px solid #334155; }
 
             /* Typing Indicator Animation Box */
-            .typing-indicator { display: none; align-self: flex-start; background: #1e293b; border: 1px solid #334155; padding: 12px 16px; border-radius: 10px; align-items: center; gap: 6px; }
-            .typing-indicator.active { display: flex; }
+            .typing-indicator { display: none; align-self: flex-start; background: #1e293b; border: 1px solid #334155; padding: 12px 18px; border-radius: 10px; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+            .typing-indicator.active { display: flex; animation: fadeIn 0.3s ease; }
             .typing-dot { width: 7px; height: 7px; background: #38bdf8; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
             .typing-dot:nth-child(1) { animation-delay: -0.32s; }
             .typing-dot:nth-child(2) { animation-delay: -0.16s; }
-            .typing-text { font-size: 0.85rem; color: #94a3b8; margin-left: 6px; font-weight: 500; }
+            .typing-text { font-size: 0.8rem; color: #38bdf8; margin-left: 6px; font-weight: 700; letter-spacing: 0.5px; }
 
             @keyframes bounce {
                 0%, 80%, 100% { transform: scale(0); }
-                40% { transform: scale(1.0); }
+                40% { transform: scale(1.15); }
             }
 
             /* Input Area */
@@ -127,7 +127,7 @@ async def get_chat_ui():
                     <span>Диалоговое окно</span>
                     <div id="aiStatusBadge" class="ai-status-badge">
                         <div class="typing-dot" style="width: 5px; height: 5px;"></div>
-                        <span id="aiStatusText">РУБИНОВ АИ ДУМАЕТ...</span>
+                        <span>РУБИНОВ АИ ДУМАЕТ...</span>
                     </div>
                 </div>
                 <button class="clear-btn" onclick="clearCurrentChat()">🗑️ Очистить чат</button>
@@ -304,7 +304,6 @@ async def get_chat_ui():
                 input.value = '';
                 renderChats();
 
-                // Включаем статус анимации думает / печатает
                 setAiWorkingState(true);
 
                 try {
@@ -322,7 +321,6 @@ async def get_chat_ui():
                     chat.history.push({ role: 'ai', text: 'Ошибка соединения с сервером.' });
                     renderChats();
                 } finally {
-                    // Выключаем анимации после получения ответа
                     setAiWorkingState(false);
                 }
             }
