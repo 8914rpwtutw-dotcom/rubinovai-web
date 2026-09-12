@@ -70,17 +70,17 @@ async def get_chat_ui():
             .clear-btn { background: #1f2937; color: #cbd5e1; border: 1px solid #374151; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s; }
             .clear-btn:hover { background: #374151; color: #fff; }
 
-            .chat-messages { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+            .chat-messages { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }
             
-            /* Широкая приветственная карточка на всю ширину контейнера */
-            .welcome-card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 24px; width: 100%; }
-            .welcome-title { font-weight: bold; font-size: 1.25rem; color: #fff; }
+            /* Аккуратная компактная и центрированная приветственная карточка */
+            .welcome-card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 18px 24px; text-align: center; max-width: 400px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.2); }
+            .welcome-title { font-weight: 600; font-size: 1rem; color: #e2e8f0; letter-spacing: 0.3px; }
 
-            .message { padding: 12px 16px; border-radius: 10px; max-width: 75%; line-height: 1.5; word-break: break-word; font-size: 0.95rem; animation: fadeIn 0.3s ease; }
+            .message { padding: 12px 16px; border-radius: 10px; max-width: 75%; line-height: 1.5; word-break: break-word; font-size: 0.95rem; animation: fadeIn 0.3s ease; align-self: flex-start; }
             @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
             .message.user { background: #0284c7; color: white; align-self: flex-end; }
-            .message.ai { background: #1e293b; color: #f1f5f9; align-self: flex-start; border: 1px solid #334155; }
+            .message.ai { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; }
 
             /* Typing Indicator Animation Box */
             .typing-indicator { display: none; align-self: flex-start; background: #1e293b; border: 1px solid #334155; padding: 12px 18px; border-radius: 10px; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
@@ -204,9 +204,11 @@ async def get_chat_ui():
                         <div class="welcome-card">
                             <div class="welcome-title">Добро пожаловать в RubinovAi 🚀</div>
                         </div>`;
+                    msgDiv.style.justifyContent = 'center';
                     return;
                 }
 
+                msgDiv.style.justifyContent = 'flex-start';
                 msgDiv.innerHTML = '';
                 chat.history.forEach(m => {
                     const el = document.createElement('div');
