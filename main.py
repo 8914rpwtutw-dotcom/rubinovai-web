@@ -13,7 +13,7 @@ client = genai.Client()
 
 class ChatRequest(BaseModel):
     message: str
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3.1-pro-preview"
     history: list = []
 
 @app.get("/", response_class=HTMLResponse)
@@ -24,7 +24,7 @@ async def get_chat_ui():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Rubinov-AI Assistant</title>
+        <title>Rubinov-AI AI-Assistant</title>
         <style>
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             body { background: #000000; color: #d4d4d4; display: flex; height: 100vh; overflow: hidden; }
@@ -109,7 +109,7 @@ async def get_chat_ui():
         <div class="sidebar">
             <div class="logo-area">
                 <div class="logo-title">RUBINOV-AI</div>
-                <div class="logo-subtitle">AI ASSISTANT</div>
+                <div class="logo-subtitle">AI-ASSISTANT</div>
             </div>
             <button class="new-chat-btn" onclick="createNewChat()">+ Новый чат</button>
             <div class="chats-section-title">
@@ -137,7 +137,7 @@ async def get_chat_ui():
             
             <div id="messages" class="chat-messages">
                 <div class="welcome-card" id="welcomeCard">
-                    <div class="welcome-title">Добро пожаловать в Rubinov-AI 🚀</div>
+                    <div class="welcome-title">Добро пожаловать в Rubinov-AI AI-Assistant 🚀</div>
                 </div>
             </div>
 
@@ -160,12 +160,12 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v3')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v3')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v5')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v5')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mono_v3', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mono_v3', activeChatId);
+                localStorage.setItem('rubinovai_chats_mono_v5', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mono_v5', activeChatId);
             }
 
             function renderChats() {
@@ -203,7 +203,7 @@ async def get_chat_ui():
                 if (!chat || chat.history.length === 0) {
                     msgDiv.innerHTML = `
                         <div class="welcome-card">
-                            <div class="welcome-title">Добро пожаловать в Rubinov-AI 🚀</div>
+                            <div class="welcome-title">Добро пожаловать в Rubinov-AI AI-Assistant 🚀</div>
                         </div>`;
                     msgDiv.style.justifyContent = 'center';
                     return;
@@ -312,7 +312,7 @@ async def get_chat_ui():
                     const response = await fetch('/api/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: text, model: "gemini-2.5-flash", history: chat.history })
+                        body: JSON.stringify({ message: text, model: "gemini-3.1-pro-preview", history: chat.history })
                     });
                     const data = await response.json();
                     const replyText = data.reply || data.detail || 'Ошибка ответа';
