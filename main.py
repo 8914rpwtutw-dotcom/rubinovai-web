@@ -11,7 +11,6 @@ from google.genai import types
 
 app = FastAPI()
 
-# Уникальный ID текущего запуска сервера (меняется при каждом перезапуске/деплое)
 SERVER_BUILD_ID = str(uuid.uuid4())[:8]
 
 app.add_middleware(
@@ -104,7 +103,7 @@ async def get_chat_ui():
                 position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                 background: #000000; z-index: 99999; display: flex;
                 flex-direction: column; align-items: center; justify-content: center;
-                gap: 20px; opacity: 1; pointer-events: auto; transition: opacity 0.5s ease;
+                gap: 20px; opacity: 1; pointer-events: auto; transition: opacity 0.4s ease;
             }}
             .site-update-overlay.hidden {{ opacity: 0; pointer-events: none; }}
             .update-spinner {{
@@ -200,11 +199,7 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
-        <div id="siteUpdateOverlay" class="site-update-overlay">
-            <div class="update-spinner"></div>
-            <div class="site-update-title">Сайт на обновлении</div>
-            <div class="site-update-subtitle">Сборка кода и инициализация сервера...</div>
-        </div>
+        <!-- Плашка создается динамически скриптом, чтобы гарантированно висеть до ответа нового бэкенда -->
 
         <div id="sidebar" class="sidebar">
             <div class="logo-area">
@@ -274,6 +269,19 @@ async def get_chat_ui():
         </div>
 
         <script>
+            // Мгновенно создаем плашку обновления прямо при старте скрипта, чтобы она закрывала экран ДО отрисовки
+            (function() {{
+                const overlay = document.createElement('div');
+                overlay.id = 'siteUpdateOverlay';
+                overlay.className = 'site-update-overlay';
+                overlay.innerHTML = `
+                    <div class="update-spinner"></div>
+                    <div class="site-update-title">Сайт на обновлении</div>
+                    <div class="site-update-subtitle">Сборка кода и инициализация сервера...</div>
+                `;
+                document.body.appendChild(overlay);
+            }})();
+
             let chats = JSON.parse(localStorage.getItem('rubinov_chats') || '[]');
             let currentChatId = localStorage.getItem('rubinov_current_id') || null;
             let selectedFile = null;
@@ -285,17 +293,25 @@ async def get_chat_ui():
                         const res = await fetch('/api/health?t=' + Date.now());
                         if (res.ok) {{
                             const data = await res.json();
-                            // Ждем пока сервер ответит и даем дополнительную паузу на завершение сборки
+                            // Проверяем что ответил именно свежий билд (или просто ждем стабильного ответа)
                             setTimeout(() => {{
-                                document.getElementById('siteUpdateOverlay').classList.add('hidden');
-                            }}, 800);
+                                const overlay = document.getElementById('siteUpdateOverlay');
+                                if (overlay) {{
+                                    overlay.classList.add('hidden');
+                                    setTimeout(() => overlay.remove(), 500);
+                                }}
+                            }}, 600);
                             return;
                         }}
                     }} catch (e) {{}}
                     attempts++;
                     await new Promise(r => setTimeout(r, 1000));
                 }}
-                document.getElementById('siteUpdateOverlay').classList.add('hidden');
+                const overlay = document.getElementById('siteUpdateOverlay');
+                if (overlay) {{
+                    overlay.classList.add('hidden');
+                    setTimeout(() => overlay.remove(), 500);
+                }}
             }
 
             window.addEventListener('DOMContentLoaded', () => {{
