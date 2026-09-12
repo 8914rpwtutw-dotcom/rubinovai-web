@@ -1,7 +1,8 @@
 import os
+import json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
@@ -13,8 +14,12 @@ client = genai.Client()
 
 class ChatRequest(BaseModel):
     message: str
-    model: str = "gemini-3.1-flash-lite"
+    model: str = "gemini-2.5-flash"
     history: list = []
+
+class TitleRequest(BaseModel):
+    message: str
+    model: str = "gemini-2.5-flash"
 
 @app.get("/", response_class=HTMLResponse)
 async def get_chat_ui():
@@ -31,27 +36,67 @@ async def get_chat_ui():
             
             /* Sidebar */
             .sidebar { width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; transition: transform 0.3s ease; z-index: 100; }
-            .logo-area { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; }
+            .logo-area { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; padding: 0 8px; }
             .logo-title { font-size: 1.1rem; font-weight: bold; letter-spacing: 0.5px; color: #cccccc; }
             .logo-subtitle { font-size: 0.75rem; color: #666666; font-weight: 600; margin-top: 4px; }
             
             .close-sidebar-btn { display: none; background: transparent; border: none; color: #888; font-size: 1.2rem; cursor: pointer; }
 
-            .new-chat-btn { background: #262626; color: #d0d0d0; border: 1px solid #333; padding: 10px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 16px; transition: background 0.2s; display: flex; align-items: center; gap: 8px; }
-            .new-chat-btn:hover { background: #333333; color: #ffffff; }
+            /* Кнопка нового чата с овальным/сквакругленным эффектом при наведении */
+            .new-chat-btn { 
+                background: transparent; 
+                color: #d0d0d0; 
+                border: 1px solid #222; 
+                padding: 10px 14px; 
+                border-radius: 20px; /* Делаем овальную форму */
+                font-weight: 600; 
+                cursor: pointer; 
+                text-align: left; 
+                margin-bottom: 16px; 
+                transition: background 0.2s ease, border-color 0.2s ease, transform 0.1s ease; 
+                display: flex; 
+                align-items: center; 
+                gap: 8px; 
+            }
+            .new-chat-btn:hover { 
+                background: #181818; /* Более темный овал при наведении */
+                border-color: #333333; 
+                color: #ffffff; 
+            }
             
-            .chats-section-title { font-size: 0.75rem; text-transform: uppercase; color: #595959; margin-bottom: 8px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
-            .chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+            .chats-section-title { font-size: 0.75rem; text-transform: uppercase; color: #595959; margin-bottom: 8px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; padding: 0 8px; }
+            .chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
             
-            .chat-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 6px; cursor: pointer; background: #121212; color: #8c8c8c; font-size: 0.9rem; transition: background 0.2s, color 0.2s; }
-            .chat-item:hover { background: #1a1a1a; color: #b5b5b5; }
-            .chat-item.active { background: #262626; color: #e0e0e0; font-weight: 500; border: 1px solid #383838; }
+            /* Элементы чатов в списке с овальным эффектом */
+            .chat-item { 
+                display: flex; 
+                align-items: center; 
+                justify-content: space-between; 
+                padding: 10px 14px; 
+                border-radius: 20px; /* Овальная форма */
+                cursor: pointer; 
+                background: transparent; 
+                color: #8c8c8c; 
+                font-size: 0.9rem; 
+                transition: background 0.2s ease, color 0.2s ease; 
+                border: 1px solid transparent;
+            }
+            .chat-item:hover { 
+                background: #141414; /* Плавный темный овал */
+                color: #b5b5b5; 
+            }
+            .chat-item.active { 
+                background: #1c1c1c; /* Активный чат - чуть темнее и выделеннее */
+                color: #e0e0e0; 
+                font-weight: 500; 
+                border: 1px solid #282828; 
+            }
             
             .chat-title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-            .delete-chat-btn { background: transparent; border: none; color: #595959; font-size: 1rem; cursor: pointer; padding: 0 4px; border-radius: 4px; transition: color 0.2s, background 0.2s; }
+            .delete-chat-btn { background: transparent; border: none; color: #595959; font-size: 1rem; cursor: pointer; padding: 2px 6px; border-radius: 50%; transition: color 0.2s, background 0.2s; }
             .delete-chat-btn:hover { color: #cccccc; background: rgba(255,255,255,0.08); }
 
-            .sidebar-footer { padding-top: 12px; border-top: 1px solid #1a1a1a; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #595959; font-weight: 500; }
+            .sidebar-footer { padding: 8px 8px 0 8px; border-top: 1px solid #1a1a1a; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #595959; font-weight: 500; }
             .status-dot { width: 8px; height: 8px; background: #737373; border-radius: 50%; }
 
             /* Main Content */
@@ -72,24 +117,24 @@ async def get_chat_ui():
                 100% { opacity: 0.5; box-shadow: 0 0 0 0 rgba(150, 150, 150, 0.1); }
             }
 
-            .clear-btn { background: #121212; color: #8c8c8c; border: 1px solid #222222; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; white-space: nowrap; transition: background 0.2s, color 0.2s; }
-            .clear-btn:hover { background: #1a1a1a; color: #b5b5b5; }
+            .clear-btn { background: #121212; color: #8c8c8c; border: 1px solid #222222; padding: 6px 12px; border-radius: 16px; cursor: pointer; font-size: 0.8rem; white-space: nowrap; transition: background 0.2s, color 0.2s; }
+            .clear-btn:hover { background: #1c1c1c; color: #b5b5b5; }
 
             .chat-messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }
             
             /* Welcome Area & Starter Chips */
             .welcome-container { display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 480px; width: 100%; text-align: center; }
-            .welcome-card { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; padding: 18px 20px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+            .welcome-card { background: #080808; border: 1px solid #1a1a1a; border-radius: 16px; padding: 18px 20px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
             .welcome-title { font-weight: 600; font-size: 0.95rem; color: #cccccc; letter-spacing: 0.3px; margin-bottom: 4px; }
             .welcome-subtitle { font-size: 0.8rem; color: #595959; }
 
             .chips-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
-            .chip { background: #0a0a0a; border: 1px solid #1c1c1c; border-radius: 10px; padding: 10px 14px; color: #8c8c8c; font-size: 0.82rem; cursor: pointer; text-align: left; transition: all 0.2s ease; display: flex; align-items: center; gap: 8px; user-select: none; }
-            .chip:hover { background: #141414; border-color: #333333; color: #cccccc; transform: translateY(-1px); }
+            .chip { background: #0a0a0a; border: 1px solid #1c1c1c; border-radius: 16px; padding: 10px 14px; color: #8c8c8c; font-size: 0.82rem; cursor: pointer; text-align: left; transition: all 0.2s ease; display: flex; align-items: center; gap: 8px; user-select: none; }
+            .chip:hover { background: #161616; border-color: #333333; color: #cccccc; transform: translateY(-1px); }
 
             .message { 
                 padding: 12px 16px; 
-                border-radius: 10px; 
+                border-radius: 14px; 
                 max-width: 85%; 
                 line-height: 1.5; 
                 overflow-wrap: break-word; 
@@ -101,7 +146,6 @@ async def get_chat_ui():
             }
             @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
-            /* ТЕМНО-СЕРЫЕ сообщения пользователя */
             .message.user { 
                 background: #242424 !important; 
                 color: #e0e0e0 !important; 
@@ -116,7 +160,7 @@ async def get_chat_ui():
                 border: 1px solid #222222; 
             }
 
-            .typing-indicator { display: none; align-self: flex-start; background: #0e0e0e; border: 1px solid #222222; padding: 12px 16px; border-radius: 10px; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+            .typing-indicator { display: none; align-self: flex-start; background: #0e0e0e; border: 1px solid #222222; padding: 12px 16px; border-radius: 14px; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
             .typing-indicator.active { display: flex; animation: fadeIn 0.3s ease; }
             .typing-dot { width: 7px; height: 7px; background: #888888; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
             .typing-dot:nth-child(1) { animation-delay: -0.32s; }
@@ -129,11 +173,11 @@ async def get_chat_ui():
             }
 
             .input-container { padding: 16px 20px; background: #000000; }
-            .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; display: flex; align-items: center; padding: 6px 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+            .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 20px; display: flex; align-items: center; padding: 6px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
             textarea { flex: 1; background: transparent; border: none; color: #b5b5b5; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 6px; }
             textarea::placeholder { color: #4a4a4a; }
             
-            .send-btn { background: #262626; color: #d0d0d0; border: 1px solid #333; padding: 8px 16px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: background 0.2s; font-size: 0.9rem; }
+            .send-btn { background: #262626; color: #d0d0d0; border: 1px solid #333; padding: 8px 16px; border-radius: 16px; font-weight: bold; cursor: pointer; transition: background 0.2s; font-size: 0.9rem; }
             .send-btn:hover { background: #333333; color: #ffffff; }
             .send-btn:disabled { background: #161616; color: #444444; border-color: #222; cursor: not-allowed; }
 
@@ -164,7 +208,7 @@ async def get_chat_ui():
             <div id="chatsList" class="chats-list"></div>
             <div class="sidebar-footer">
                 <div class="status-dot"></div>
-                <span>Flash-Lite Active</span>
+                <span>Streaming Active</span>
             </div>
         </div>
 
@@ -183,9 +227,7 @@ async def get_chat_ui():
                 <button class="clear-btn" onclick="clearCurrentChat()">🗑️ Очистить</button>
             </div>
             
-            <div id="messages" class="chat-messages">
-                <!-- Заполняется динамически через renderMessages -->
-            </div>
+            <div id="messages" class="chat-messages"></div>
 
             <div style="padding: 0 20px 8px 20px;">
                 <div id="typingIndicator" class="typing-indicator">
@@ -205,12 +247,12 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v14')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v14')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_stream_v2')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_stream_v2')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mono_v14', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mono_v14', activeChatId);
+                localStorage.setItem('rubinovai_chats_stream_v2', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_stream_v2', activeChatId);
             }
 
             function toggleSidebar() {
@@ -285,9 +327,7 @@ async def get_chat_ui():
             function sendChip(text) {
                 const input = document.getElementById('messageInput');
                 input.value = text.trim();
-                setTimeout(() => {
-                    sendMessage();
-                }, 50);
+                setTimeout(() => { sendMessage(); }, 50);
             }
 
             function setAiWorkingState(isWorking) {
@@ -308,25 +348,6 @@ async def get_chat_ui():
                     textarea.disabled = false;
                     textarea.focus();
                 }
-                const msgDiv = document.getElementById('messages');
-                msgDiv.scrollTop = msgDiv.scrollHeight;
-            }
-
-            function typeWriterEffect(element, text, speed = 8, callback) {
-                let i = 0;
-                element.innerText = '';
-                function type() {
-                    if (i < text.length) {
-                        element.innerText += text.charAt(i);
-                        i++;
-                        const msgDiv = document.getElementById('messages');
-                        msgDiv.scrollTop = msgDiv.scrollHeight;
-                        setTimeout(type, speed);
-                    } else {
-                        if (callback) callback();
-                    }
-                }
-                type();
             }
 
             function createNewChat() {
@@ -348,9 +369,7 @@ async def get_chat_ui():
                     return;
                 }
                 chats = chats.filter(c => c.id !== id);
-                if (activeChatId === id) {
-                    activeChatId = chats[0].id;
-                }
+                if (activeChatId === id) activeChatId = chats[0].id;
                 saveState();
                 renderChats();
             }
@@ -365,6 +384,7 @@ async def get_chat_ui():
                 const chat = chats.find(c => c.id === activeChatId);
                 if (chat) {
                     chat.history = [];
+                    chat.title = 'Новый чат';
                     saveState();
                     renderChats();
                 }
@@ -377,6 +397,27 @@ async def get_chat_ui():
                 }
             }
 
+            async function generateChatTitle(firstMessage, chatId) {
+                try {
+                    const res = await fetch('/api/title', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message: firstMessage, model: "gemini-2.5-flash" })
+                    });
+                    const data = await res.json();
+                    if (data.title) {
+                        const chat = chats.find(c => c.id === chatId);
+                        if (chat) {
+                            chat.title = data.title;
+                            saveState();
+                            renderChats();
+                        }
+                    }
+                } catch (e) {
+                    console.error("Title gen error:", e);
+                }
+            }
+
             async function sendMessage() {
                 const input = document.getElementById('messageInput');
                 const text = input.value.trim();
@@ -385,9 +426,7 @@ async def get_chat_ui():
                 let chat = chats.find(c => c.id === activeChatId);
                 if (!chat) return;
 
-                if (chat.history.length === 0 && chat.title === 'Новый чат') {
-                    chat.title = text.length > 22 ? text.substring(0, 22) + '...' : text;
-                }
+                const isFirstMessage = (chat.history.length === 0);
 
                 chat.history.push({ role: 'user', text: text });
                 input.value = '';
@@ -395,31 +434,49 @@ async def get_chat_ui():
 
                 setAiWorkingState(true);
 
+                const msgDiv = document.getElementById('messages');
+                const aiElement = document.createElement('div');
+                aiElement.className = 'message ai';
+                aiElement.innerText = '';
+                msgDiv.appendChild(aiElement);
+                msgDiv.scrollTop = msgDiv.scrollHeight;
+
                 try {
-                    const response = await fetch('/api/chat', {
+                    const response = await fetch('/api/chat/stream', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: text, model: "gemini-3.1-flash-lite", history: chat.history })
+                        body: JSON.stringify({ message: text, model: "gemini-2.5-flash", history: chat.history })
                     });
-                    const data = await response.json();
-                    const replyText = data.reply || data.detail || 'Ошибка ответа';
-                    
-                    setAiWorkingState(false);
-                    
-                    const msgDiv = document.getElementById('messages');
-                    const aiElement = document.createElement('div');
-                    aiElement.className = 'message ai';
-                    msgDiv.appendChild(aiElement);
 
-                    typeWriterEffect(aiElement, replyText, 8, () => {
-                        chat.history.push({ role: 'ai', text: replyText });
-                        saveState();
-                    });
+                    if (!response.ok) throw new Error('Ошибка потока');
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let fullReply = '';
+
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        
+                        const chunk = decoder.decode(value, { stream: true });
+                        fullReply += chunk;
+                        aiElement.innerText = fullReply;
+                        msgDiv.scrollTop = msgDiv.scrollHeight;
+                    }
+
+                    chat.history.push({ role: 'ai', text: fullReply });
+                    saveState();
+                    setAiWorkingState(false);
+
+                    if (isFirstMessage) {
+                        generateChatTitle(text, chat.id);
+                    }
 
                 } catch (err) {
                     setAiWorkingState(false);
+                    aiElement.innerText = 'Ошибка соединения с сервером.';
                     chat.history.push({ role: 'ai', text: 'Ошибка соединения с сервером.' });
-                    renderChats();
+                    saveState();
                 }
             }
 
@@ -429,22 +486,40 @@ async def get_chat_ui():
     </html>
     """
 
-@app.post("/api/chat")
-async def chat_endpoint(req: ChatRequest):
+@app.post("/api/title")
+async def generate_title(req: TitleRequest):
     try:
-        formatted_history = []
-        # Передаем все предыдущие сообщения для полноценного контекста (кроме текущего сообщения, которое отправляется через send_message)
-        for h in req.history[:-1]:
-            role = "user" if h["role"] == "user" else "model"
-            formatted_history.append(
-                types.Content(
-                    role=role,
-                    parts=[types.Part.from_text(text=h["text"])]
-                )
-            )
-
-        chat_session = client.chats.create(model=req.model, history=formatted_history)
-        response = chat_session.send_message(req.message)
-        return {"reply": response.text}
+        response = client.models.generate_content(
+            model=req.model,
+            contents=f"Придумай очень короткое название (максимум 3-4 слова, без кавычек и точек на конце) для чата, который начинается с этого сообщения: «{req.message}»"
+        )
+        title = response.text.strip().replace('"', '').replace("'", "")
+        if len(title) > 30:
+            title = title[:27] + "..."
+        return {"title": title}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"title": req.message[:20] + "..."}
+
+@app.post("/api/chat/stream")
+async def chat_stream_endpoint(req: ChatRequest):
+    async def event_generator():
+        try:
+            formatted_history = []
+            for h in req.history[:-1]:
+                role = "user" if h["role"] == "user" else "model"
+                formatted_history.append(
+                    types.Content(
+                        role=role,
+                        parts=[types.Part.from_text(text=h["text"])]
+                    )
+                )
+
+            chat_session = client.chats.create(model=req.model, history=formatted_history)
+            
+            async for chunk in await chat_session.send_message_stream(req.message):
+                if chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            yield f"\n[Ошибка генерации: {str(e)}]"
+
+    return StreamingResponse(event_generator(), media_type="text/plain")
