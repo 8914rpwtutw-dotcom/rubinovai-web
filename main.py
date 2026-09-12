@@ -32,43 +32,44 @@ async def get_chat_ui():
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             body { background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
-            /* Экран обновления (оверлей) */
-            .update-overlay {
+            /* Полноэкранный экран обновления (активен при загрузке) */
+            .site-update-overlay {
                 position: fixed;
                 top: 0; left: 0; width: 100%; height: 100%;
-                background: rgba(0, 0, 0, 0.85);
-                backdrop-filter: blur(8px);
-                z-index: 9999;
+                background: #000000;
+                z-index: 99999;
                 display: flex;
                 flex-direction: column;
                 align-items: center;
                 justify-content: center;
-                gap: 16px;
+                gap: 20px;
                 opacity: 0;
                 pointer-events: none;
                 transition: opacity 0.3s ease;
             }
-            .update-overlay.active {
+            .site-update-overlay.active {
                 opacity: 1;
                 pointer-events: auto;
             }
             .update-spinner {
-                width: 48px;
-                height: 48px;
+                width: 56px;
+                height: 56px;
                 border: 3px solid rgba(255, 255, 255, 0.1);
                 border-top-color: #ffffff;
                 border-radius: 50%;
                 animation: spin 0.8s linear infinite;
             }
-            .update-text {
-                font-size: 1.1rem;
-                font-weight: 600;
+            .site-update-title {
+                font-size: 1.6rem;
+                font-weight: 800;
                 color: #ffffff;
-                letter-spacing: 0.5px;
+                letter-spacing: 1px;
+                text-transform: uppercase;
             }
-            .update-subtext {
-                font-size: 0.85rem;
-                color: #777777;
+            .site-update-subtitle {
+                font-size: 0.95rem;
+                color: #666666;
+                font-weight: 500;
             }
             @keyframes spin {
                 to { transform: rotate(360deg); }
@@ -145,14 +146,6 @@ async def get_chat_ui():
             .file-preview-pill { display: inline-flex; align-items: center; gap: 6px; background: #181818; border: 1px solid #333; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; color: #ccc; margin-bottom: 8px; width: fit-content; }
             .file-preview-pill button { background: none; border: none; color: #888; cursor: pointer; font-weight: bold; font-size: 1rem; }
 
-            .typing-indicator { display: none; align-self: flex-start; background: #0e0e0e; border: 1px solid #222; padding: 12px 16px; border-radius: 14px; align-items: center; gap: 8px; }
-            .typing-indicator.active { display: flex; }
-            .typing-dot { width: 7px; height: 7px; background: #888; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
-            .typing-dot:nth-child(1) { animation-delay: -0.32s; }
-            .typing-dot:nth-child(2) { animation-delay: -0.16s; }
-
-            @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1.15); } }
-
             .input-container { padding: 16px 20px; background: #000; }
             .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 20px; display: flex; flex-direction: column; padding: 10px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
             .input-row { display: flex; align-items: center; gap: 10px; width: 100%; }
@@ -177,11 +170,11 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
-        <!-- Оверлей обновления -->
-        <div id="updateOverlay" class="update-overlay">
+        <!-- Полноэкранный экран обновления -->
+        <div id="siteUpdateOverlay" class="site-update-overlay">
             <div class="update-spinner"></div>
-            <div class="update-text">Сайт на обновлении...</div>
-            <div class="update-subtext">Нейросеть генерирует контент и обновляет данные</div>
+            <div class="site-update-title">Сайт на обновлении</div>
+            <div class="site-update-subtitle">Выполняется загрузка и обработка данных...</div>
         </div>
 
         <div id="sidebar" class="sidebar">
@@ -208,8 +201,8 @@ async def get_chat_ui():
                     <div class="top-title">
                         <span>Мультимодальный чат</span>
                         <div id="aiStatusBadge" class="ai-status-badge">
-                            <div class="typing-dot" style="width: 5px; height: 5px; background: #888;"></div>
-                            <span>ОБРАБОТКА...</span>
+                            <div class="update-spinner" style="width: 12px; height: 12px; border-width: 2px;"></div>
+                            <span>ЗАГРУЗКА...</span>
                         </div>
                     </div>
                 </div>
@@ -217,15 +210,6 @@ async def get_chat_ui():
             </div>
             
             <div id="messages" class="chat-messages"></div>
-
-            <div style="padding: 0 20px 8px 20px;">
-                <div id="typingIndicator" class="typing-indicator">
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                    <span style="font-size: 0.75rem; color: #666; font-weight: 700;">НЕЙРОСЕТЬ ДУМАЕТ / РИСУЕТ...</span>
-                </div>
-            </div>
 
             <div class="input-container">
                 <div class="input-box">
@@ -241,13 +225,13 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v5')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v5')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v6')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v6')) || chats[0].id;
             let attachedFile = null;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mm_v5', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mm_v5', activeChatId);
+                localStorage.setItem('rubinovai_chats_mm_v6', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mm_v6', activeChatId);
             }
 
             function toggleSidebar() {
@@ -362,8 +346,7 @@ async def get_chat_ui():
 
             function setWorkingState(isWorking) {
                 document.getElementById('aiStatusBadge').classList.toggle('active', isWorking);
-                document.getElementById('typingIndicator').classList.toggle('active', isWorking);
-                document.getElementById('updateOverlay').classList.toggle('active', isWorking);
+                document.getElementById('siteUpdateOverlay').classList.toggle('active', isWorking);
                 document.getElementById('sendBtn').disabled = isWorking;
                 document.getElementById('messageInput').disabled = isWorking;
             }
