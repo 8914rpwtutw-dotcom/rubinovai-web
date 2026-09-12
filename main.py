@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from google import genai
+from google.genai import types
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -12,7 +13,7 @@ client = genai.Client()
 
 class ChatRequest(BaseModel):
     message: str
-    model: str = "gemini-3.1-flash-lite"
+    model: str = "gemini-2.5-flash"
     history: list = []
 
 @app.get("/", response_class=HTMLResponse)
@@ -23,7 +24,7 @@ async def get_chat_ui():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>RubinovAi v8.4 Pro</title>
+        <title>RubinovAi Pro</title>
         <style>
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             body { background: #0b0f19; color: #f8fafc; display: flex; height: 100vh; overflow: hidden; }
@@ -71,9 +72,9 @@ async def get_chat_ui():
 
             .chat-messages { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
             
-            .welcome-card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 20px; max-width: 600px; }
-            .welcome-title { font-weight: bold; font-size: 1.1rem; margin-bottom: 8px; color: #fff; }
-            .welcome-desc { color: #94a3b8; font-size: 0.9rem; line-height: 1.4; }
+            /* Широкая приветственная карточка на всю ширину контейнера */
+            .welcome-card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 24px; width: 100%; }
+            .welcome-title { font-weight: bold; font-size: 1.25rem; color: #fff; }
 
             .message { padding: 12px 16px; border-radius: 10px; max-width: 75%; line-height: 1.5; word-break: break-word; font-size: 0.95rem; animation: fadeIn 0.3s ease; }
             @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
@@ -117,7 +118,7 @@ async def get_chat_ui():
             <div id="chatsList" class="chats-list"></div>
             <div class="sidebar-footer">
                 <div class="status-dot"></div>
-                <span>Gemini-3.1 Active</span>
+                <span>Gemini Active</span>
             </div>
         </div>
 
@@ -135,8 +136,7 @@ async def get_chat_ui():
             
             <div id="messages" class="chat-messages">
                 <div class="welcome-card" id="welcomeCard">
-                    <div class="welcome-title">Добро пожаловать в RubinovAi v8.4 🚀</div>
-                    <div class="welcome-desc">Интерактивный интерфейс с анимациями и поддержкой памяти.</div>
+                    <div class="welcome-title">Добро пожаловать в RubinovAi 🚀</div>
                 </div>
             </div>
 
@@ -202,8 +202,7 @@ async def get_chat_ui():
                 if (!chat || chat.history.length === 0) {
                     msgDiv.innerHTML = `
                         <div class="welcome-card">
-                            <div class="welcome-title">Добро пожаловать в RubinovAi v8.4 🚀</div>
-                            <div class="welcome-desc">Интерактивный интерфейс с анимациями и поддержкой памяти.</div>
+                            <div class="welcome-title">Добро пожаловать в RubinovAi 🚀</div>
                         </div>`;
                     return;
                 }
@@ -310,7 +309,7 @@ async def get_chat_ui():
                     const response = await fetch('/api/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: text, model: "gemini-3.1-flash-lite", history: chat.history })
+                        body: JSON.stringify({ message: text, model: "gemini-2.5-flash", history: chat.history })
                     });
                     const data = await response.json();
                     const replyText = data.reply || data.detail || 'Ошибка ответа';
@@ -337,10 +336,12 @@ async def chat_endpoint(req: ChatRequest):
         formatted_history = []
         for h in req.history[:-1]:
             role = "user" if h["role"] == "user" else "model"
-            formatted_history.append({
-                "role": role,
-                "parts": [{"text": h["text"]}]
-            })
+            formatted_history.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=h["text"])]
+                )
+            )
 
         chat_session = client.chats.create(model=req.model, history=formatted_history)
         response = chat_session.send_message(req.message)
