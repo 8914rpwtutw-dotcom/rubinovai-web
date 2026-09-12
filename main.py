@@ -27,14 +27,16 @@ async def get_chat_ui():
         <title>Rubinov-AI AI-Assistant</title>
         <style>
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-            body { background: #000000; color: #d4d4d4; display: flex; height: 100vh; overflow: hidden; }
+            body { background: #000000; color: #d4d4d4; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
             /* Sidebar */
-            .sidebar { width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; }
-            .logo-area { margin-bottom: 24px; }
+            .sidebar { width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; transition: transform 0.3s ease; z-index: 100; }
+            .logo-area { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; }
             .logo-title { font-size: 1.1rem; font-weight: bold; letter-spacing: 0.5px; color: #e0e0e0; }
             .logo-subtitle { font-size: 0.75rem; color: #737373; font-weight: 600; margin-top: 4px; }
             
+            .close-sidebar-btn { display: none; background: transparent; border: none; color: #888; font-size: 1.2rem; cursor: pointer; }
+
             .new-chat-btn { background: #e0e0e0; color: #111111; border: none; padding: 10px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 16px; transition: background 0.2s; display: flex; align-items: center; gap: 8px; }
             .new-chat-btn:hover { background: #c2c2c2; }
             
@@ -53,12 +55,15 @@ async def get_chat_ui():
             .status-dot { width: 8px; height: 8px; background: #b0b0b0; border-radius: 50%; }
 
             /* Main Content */
-            .main-content { flex: 1; display: flex; flex-direction: column; background: #000000; }
-            .top-nav { padding: 16px 24px; border-bottom: 1px solid #1a1a1a; display: flex; justify-content: space-between; align-items: center; background: #080808; }
-            .top-title { font-weight: 600; font-size: 1rem; color: #d4d4d4; display: flex; align-items: center; gap: 12px; }
+            .main-content { flex: 1; display: flex; flex-direction: column; background: #000000; width: 100%; overflow: hidden; }
+            .top-nav { padding: 16px 20px; border-bottom: 1px solid #1a1a1a; display: flex; justify-content: space-between; align-items: center; background: #080808; gap: 10px; }
             
-            /* Status badge animation */
-            .ai-status-badge { font-size: 0.75rem; background: rgba(255, 255, 255, 0.03); color: #cccccc; padding: 5px 12px; border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.15); display: none; align-items: center; gap: 8px; font-weight: 600; letter-spacing: 0.5px; }
+            .top-left-group { display: flex; align-items: center; gap: 12px; overflow: hidden; }
+            .menu-btn { display: none; background: #121212; border: 1px solid #222; color: #ccc; font-size: 1.1rem; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+
+            .top-title { font-weight: 600; font-size: 0.95rem; color: #d4d4d4; display: flex; align-items: center; gap: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            
+            .ai-status-badge { font-size: 0.7rem; background: rgba(255, 255, 255, 0.03); color: #cccccc; padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.15); display: none; align-items: center; gap: 6px; font-weight: 600; }
             .ai-status-badge.active { display: inline-flex; animation: pulseBadge 1.5s infinite; }
             
             @keyframes pulseBadge {
@@ -67,46 +72,58 @@ async def get_chat_ui():
                 100% { opacity: 0.5; box-shadow: 0 0 0 0 rgba(200, 200, 200, 0.1); }
             }
 
-            .clear-btn { background: #121212; color: #999999; border: 1px solid #222222; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s, color 0.2s; }
+            .clear-btn { background: #121212; color: #999999; border: 1px solid #222222; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; white-space: nowrap; transition: background 0.2s, color 0.2s; }
             .clear-btn:hover { background: #1a1a1a; color: #d4d4d4; }
 
-            .chat-messages { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }
+            .chat-messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }
             
-            .welcome-card { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; padding: 18px 24px; text-align: center; max-width: 400px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
-            .welcome-title { font-weight: 600; font-size: 1rem; color: #d4d4d4; letter-spacing: 0.3px; }
+            .welcome-card { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; padding: 18px 20px; text-align: center; max-width: 400px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+            .welcome-title { font-weight: 600; font-size: 0.95rem; color: #d4d4d4; letter-spacing: 0.3px; }
 
-            .message { padding: 12px 16px; border-radius: 10px; max-width: 75%; line-height: 1.5; word-break: break-word; font-size: 0.95rem; animation: fadeIn 0.3s ease; align-self: flex-start; }
+            .message { padding: 12px 16px; border-radius: 10px; max-width: 85%; line-height: 1.5; word-break: break-word; font-size: 0.95rem; animation: fadeIn 0.3s ease; align-self: flex-start; }
             @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
             .message.user { background: #d4d4d4; color: #111111; align-self: flex-end; font-weight: 500; }
             .message.ai { background: #0e0e0e; color: #cccccc; border: 1px solid #222222; }
 
-            .typing-indicator { display: none; align-self: flex-start; background: #0e0e0e; border: 1px solid #222222; padding: 12px 18px; border-radius: 10px; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+            .typing-indicator { display: none; align-self: flex-start; background: #0e0e0e; border: 1px solid #222222; padding: 12px 16px; border-radius: 10px; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
             .typing-indicator.active { display: flex; animation: fadeIn 0.3s ease; }
             .typing-dot { width: 7px; height: 7px; background: #cccccc; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
             .typing-dot:nth-child(1) { animation-delay: -0.32s; }
             .typing-dot:nth-child(2) { animation-delay: -0.16s; }
-            .typing-text { font-size: 0.8rem; color: #888888; margin-left: 6px; font-weight: 700; letter-spacing: 0.5px; }
+            .typing-text { font-size: 0.75rem; color: #888888; margin-left: 4px; font-weight: 700; letter-spacing: 0.5px; }
 
             @keyframes bounce {
                 0%, 80%, 100% { transform: scale(0); }
                 40% { transform: scale(1.15); }
             }
 
-            .input-container { padding: 20px 24px; background: #000000; }
-            .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; display: flex; align-items: center; padding: 8px 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+            .input-container { padding: 16px 20px; background: #000000; }
+            .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 12px; display: flex; align-items: center; padding: 6px 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
             textarea { flex: 1; background: transparent; border: none; color: #d4d4d4; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 6px; }
             textarea::placeholder { color: #555555; }
-            .send-btn { background: #d4d4d4; color: #111111; border: none; padding: 8px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+            .send-btn { background: #d4d4d4; color: #111111; border: none; padding: 8px 16px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: background 0.2s; font-size: 0.9rem; }
             .send-btn:hover { background: #b8b8b8; }
             .send-btn:disabled { background: #222222; color: #555555; cursor: not-allowed; }
+
+            /* Mobile Responsive Media Query */
+            @media (max-width: 768px) {
+                .sidebar { position: absolute; height: 100%; left: 0; top: 0; transform: translateX(-100%); box-shadow: 10px 0 30px rgba(0,0,0,0.8); }
+                .sidebar.open { transform: translateX(0); }
+                .close-sidebar-btn { display: block; }
+                .menu-btn { display: inline-flex; align-items: center; justify-content: center; }
+                .ai-status-badge { display: none !important; } /* Экономим место в шапке телефона */
+            }
         </style>
     </head>
     <body>
-        <div class="sidebar">
+        <div id="sidebar" class="sidebar">
             <div class="logo-area">
-                <div class="logo-title">RUBINOV-AI</div>
-                <div class="logo-subtitle">AI-ASSISTANT</div>
+                <div>
+                    <div class="logo-title">RUBINOV-AI</div>
+                    <div class="logo-subtitle">AI-ASSISTANT</div>
+                </div>
+                <button class="close-sidebar-btn" onclick="toggleSidebar()">&times;</button>
             </div>
             <button class="new-chat-btn" onclick="createNewChat()">+ Новый чат</button>
             <div class="chats-section-title">
@@ -122,14 +139,17 @@ async def get_chat_ui():
 
         <div class="main-content">
             <div class="top-nav">
-                <div class="top-title">
-                    <span>Диалоговое окно</span>
-                    <div id="aiStatusBadge" class="ai-status-badge">
-                        <div class="typing-dot" style="width: 5px; height: 5px; background: #cccccc;"></div>
-                        <span>РУБИНОВ АИ ДУМАЕТ...</span>
+                <div class="top-left-group">
+                    <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+                    <div class="top-title">
+                        <span>Диалог</span>
+                        <div id="aiStatusBadge" class="ai-status-badge">
+                            <div class="typing-dot" style="width: 5px; height: 5px; background: #cccccc;"></div>
+                            <span>ДУМАЕТ...</span>
+                        </div>
                     </div>
                 </div>
-                <button class="clear-btn" onclick="clearCurrentChat()">🗑️ Очистить чат</button>
+                <button class="clear-btn" onclick="clearCurrentChat()">🗑️ Очистить</button>
             </div>
             
             <div id="messages" class="chat-messages">
@@ -138,7 +158,7 @@ async def get_chat_ui():
                 </div>
             </div>
 
-            <div style="padding: 0 24px 12px 24px;">
+            <div style="padding: 0 20px 8px 20px;">
                 <div id="typingIndicator" class="typing-indicator">
                     <div class="typing-dot"></div>
                     <div class="typing-dot"></div>
@@ -149,19 +169,24 @@ async def get_chat_ui():
 
             <div class="input-container">
                 <div class="input-box">
-                    <textarea id="messageInput" placeholder="Введите сообщение... (Enter для отправки)" rows="1" onkeydown="handleKeyDown(event)"></textarea>
+                    <textarea id="messageInput" placeholder="Введите сообщение..." rows="1" onkeydown="handleKeyDown(event)"></textarea>
                     <button id="sendBtn" class="send-btn" onclick="sendMessage()">Отправить</button>
                 </div>
             </div>
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v6')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v6')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v7')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v7')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mono_v6', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mono_v6', activeChatId);
+                localStorage.setItem('rubinovai_chats_mono_v7', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mono_v7', activeChatId);
+            }
+
+            function toggleSidebar() {
+                const sidebar = document.getElementById('sidebar');
+                sidebar.classList.toggle('open');
             }
 
             function renderChats() {
@@ -174,7 +199,10 @@ async def get_chat_ui():
                     const titleSpan = document.createElement('span');
                     titleSpan.className = 'chat-title-text';
                     titleSpan.innerText = chat.title;
-                    titleSpan.onclick = () => switchChat(chat.id);
+                    titleSpan.onclick = () => {
+                        switchChat(chat.id);
+                        if (window.innerWidth <= 768) toggleSidebar(); // Скрывать меню на телефоне при клике
+                    };
                     
                     const deleteBtn = document.createElement('button');
                     deleteBtn.className = 'delete-chat-btn';
@@ -248,6 +276,7 @@ async def get_chat_ui():
                 activeChatId = newId;
                 saveState();
                 renderChats();
+                if (window.innerWidth <= 768) toggleSidebar();
             }
 
             function deleteChat(id) {
