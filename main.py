@@ -101,7 +101,7 @@ async def get_chat_ui():
             }
             @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
-            /* ТЕМНО-СЕРЫЕ сообщения пользователя вместо белых */
+            /* ТЕМНО-СЕРЫЕ сообщения пользователя */
             .message.user { 
                 background: #242424 !important; 
                 color: #e0e0e0 !important; 
@@ -205,12 +205,12 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v13')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v13')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v14')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v14')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mono_v13', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mono_v13', activeChatId);
+                localStorage.setItem('rubinovai_chats_mono_v14', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mono_v14', activeChatId);
             }
 
             function toggleSidebar() {
@@ -433,6 +433,7 @@ async def get_chat_ui():
 async def chat_endpoint(req: ChatRequest):
     try:
         formatted_history = []
+        # Передаем все предыдущие сообщения для полноценного контекста (кроме текущего сообщения, которое отправляется через send_message)
         for h in req.history[:-1]:
             role = "user" if h["role"] == "user" else "model"
             formatted_history.append(
