@@ -192,12 +192,12 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v10')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v10')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v11')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v11')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mono_v10', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mono_v10', activeChatId);
+                localStorage.setItem('rubinovai_chats_mono_v11', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mono_v11', activeChatId);
             }
 
             function toggleSidebar() {
@@ -352,7 +352,8 @@ async def get_chat_ui():
                 const chat = chats.find(c => c.id === activeChatId);
                 if (chat) {
                     chat.history = [];
-                    chat.title = 'Новый чат';
+                    // Сохраняем имя чата, не сбрасываем его в «Новый чат» принудительно, 
+                    // чтобы пользователь не терял контекст названия текущей ветки
                     saveState();
                     renderChats();
                 }
@@ -373,7 +374,7 @@ async def get_chat_ui():
                 let chat = chats.find(c => c.id === activeChatId);
                 if (!chat) return;
 
-                if (chat.history.length === 0) {
+                if (chat.history.length === 0 && chat.title === 'Новый чат') {
                     chat.title = text.length > 22 ? text.substring(0, 22) + '...' : text;
                 }
 
