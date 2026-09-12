@@ -84,10 +84,21 @@ async def get_chat_ui():
             .welcome-subtitle { font-size: 0.8rem; color: #6b6b6b; }
 
             .chips-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
-            .chip { background: #0a0a0a; border: 1px solid #1c1c1c; border-radius: 10px; padding: 10px 14px; color: #a3a3a3; font-size: 0.82rem; cursor: pointer; text-align: left; transition: all 0.2s ease; display: flex; align-items: center; gap: 8px; }
+            .chip { background: #0a0a0a; border: 1px solid #1c1c1c; border-radius: 10px; padding: 10px 14px; color: #a3a3a3; font-size: 0.82rem; cursor: pointer; text-align: left; transition: all 0.2s ease; display: flex; align-items: center; gap: 8px; user-select: none; }
             .chip:hover { background: #141414; border-color: #333333; color: #ffffff; transform: translateY(-1px); }
 
-            .message { padding: 12px 16px; border-radius: 10px; max-width: 85%; line-height: 1.5; word-break: break-word; font-size: 0.95rem; animation: fadeIn 0.3s ease; align-self: flex-start; }
+            .message { 
+                padding: 12px 16px; 
+                border-radius: 10px; 
+                max-width: 85%; 
+                line-height: 1.5; 
+                overflow-wrap: break-word; 
+                word-break: normal; 
+                white-space: pre-wrap; 
+                font-size: 0.95rem; 
+                animation: fadeIn 0.3s ease; 
+                align-self: flex-start; 
+            }
             @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
             .message.user { background: #d4d4d4; color: #111111; align-self: flex-end; font-weight: 500; }
@@ -181,12 +192,12 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v8')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v8')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mono_v10')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mono_v10')) || chats[0].id;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mono_v8', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mono_v8', activeChatId);
+                localStorage.setItem('rubinovai_chats_mono_v10', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mono_v10', activeChatId);
             }
 
             function toggleSidebar() {
@@ -237,10 +248,10 @@ async def get_chat_ui():
                                 <div class="welcome-subtitle">Выберите быстрый запрос или напишите свой ниже</div>
                             </div>
                             <div class="chips-grid">
-                                <div class="chip" onclick="sendChip('💡 Придумай идею для проекта')">💡 Идея для проекта</div>
-                                <div class="chip" onclick="sendChip('💻 Напиши код на Python / FastAPI')">💻 Код на FastAPI</div>
-                                <div class="chip" onclick="sendChip('✍️ Напиши текст или статью')">✍️ Написать текст</div>
-                                <div class="chip" onclick="sendChip('📊 Объясни сложную концепцию простыми словами')">📊 Объяснить простая вещь</div>
+                                <div class="chip" onclick="sendChip('Придумай идею для проекта')">💡 Идея для проекта</div>
+                                <div class="chip" onclick="sendChip('Напиши код на Python / FastAPI')">💻 Код на FastAPI</div>
+                                <div class="chip" onclick="sendChip('Напиши текст или статью')">✍️ Написать текст</div>
+                                <div class="chip" onclick="sendChip('Объясни сложную концепцию простыми словами')">📊 Объяснить концепцию</div>
                             </div>
                         </div>`;
                     msgDiv.style.justifyContent = 'center';
@@ -259,8 +270,11 @@ async def get_chat_ui():
             }
 
             function sendChip(text) {
-                document.getElementById('messageInput').value = text;
-                sendMessage();
+                const input = document.getElementById('messageInput');
+                input.value = text.trim();
+                setTimeout(() => {
+                    sendMessage();
+                }, 50);
             }
 
             function setAiWorkingState(isWorking) {
@@ -285,8 +299,7 @@ async def get_chat_ui():
                 msgDiv.scrollTop = msgDiv.scrollHeight;
             }
 
-            // Функция анимации печати (Typewriter effect)
-            function typeWriterEffect(element, text, speed = 12, callback) {
+            function typeWriterEffect(element, text, speed = 8, callback) {
                 let i = 0;
                 element.innerText = '';
                 function type() {
@@ -379,7 +392,6 @@ async def get_chat_ui():
                     const data = await response.json();
                     const replyText = data.reply || data.detail || 'Ошибка ответа';
                     
-                    // Скрываем индикатор «печатает» и создаем пустой блок для ответа ИИ
                     setAiWorkingState(false);
                     
                     const msgDiv = document.getElementById('messages');
@@ -387,8 +399,7 @@ async def get_chat_ui():
                     aiElement.className = 'message ai';
                     msgDiv.appendChild(aiElement);
 
-                    // Запускаем эффект печати
-                    typeWriterEffect(aiElement, replyText, 10, () => {
+                    typeWriterEffect(aiElement, replyText, 8, () => {
                         chat.history.push({ role: 'ai', text: replyText });
                         saveState();
                     });
