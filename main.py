@@ -14,7 +14,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 client = genai.Client()
 
 DEFAULT_MODEL = "gemini-2.5-flash"
-IMAGE_MODEL = "imagen-3.0-generate-002"  # Официальная модель для генерации картинок
+IMAGE_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
     message: str
@@ -32,6 +32,48 @@ async def get_chat_ui():
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             body { background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
+            /* Экран обновления (оверлей) */
+            .update-overlay {
+                position: fixed;
+                top: 0; left: 0; width: 100%; height: 100%;
+                background: rgba(0, 0, 0, 0.85);
+                backdrop-filter: blur(8px);
+                z-index: 9999;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 16px;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.3s ease;
+            }
+            .update-overlay.active {
+                opacity: 1;
+                pointer-events: auto;
+            }
+            .update-spinner {
+                width: 48px;
+                height: 48px;
+                border: 3px solid rgba(255, 255, 255, 0.1);
+                border-top-color: #ffffff;
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+            }
+            .update-text {
+                font-size: 1.1rem;
+                font-weight: 600;
+                color: #ffffff;
+                letter-spacing: 0.5px;
+            }
+            .update-subtext {
+                font-size: 0.85rem;
+                color: #777777;
+            }
+            @keyframes spin {
+                to { transform: rotate(360deg); }
+            }
+
             /* Sidebar */
             .sidebar { width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; transition: transform 0.3s ease; z-index: 100; }
             .logo-area { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; padding: 0 8px; }
@@ -135,6 +177,13 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
+        <!-- Оверлей обновления -->
+        <div id="updateOverlay" class="update-overlay">
+            <div class="update-spinner"></div>
+            <div class="update-text">Сайт на обновлении...</div>
+            <div class="update-subtext">Нейросеть генерирует контент и обновляет данные</div>
+        </div>
+
         <div id="sidebar" class="sidebar">
             <div class="logo-area">
                 <div>
@@ -192,13 +241,13 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v4')) || [{ id: 1, title: 'Новый чат', history: [] }];
-            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v4')) || chats[0].id;
+            let chats = JSON.parse(localStorage.getItem('rubinovai_chats_mm_v5')) || [{ id: 1, title: 'Новый чат', history: [] }];
+            let activeChatId = Number(localStorage.getItem('rubinovai_active_id_mm_v5')) || chats[0].id;
             let attachedFile = null;
 
             function saveState() {
-                localStorage.setItem('rubinovai_chats_mm_v4', JSON.stringify(chats));
-                localStorage.setItem('rubinovai_active_id_mm_v4', activeChatId);
+                localStorage.setItem('rubinovai_chats_mm_v5', JSON.stringify(chats));
+                localStorage.setItem('rubinovai_active_id_mm_v5', activeChatId);
             }
 
             function toggleSidebar() {
@@ -314,6 +363,7 @@ async def get_chat_ui():
             function setWorkingState(isWorking) {
                 document.getElementById('aiStatusBadge').classList.toggle('active', isWorking);
                 document.getElementById('typingIndicator').classList.toggle('active', isWorking);
+                document.getElementById('updateOverlay').classList.toggle('active', isWorking);
                 document.getElementById('sendBtn').disabled = isWorking;
                 document.getElementById('messageInput').disabled = isWorking;
             }
@@ -439,7 +489,6 @@ async def chat_endpoint(
         is_image_request = any(kw in low_msg for kw in ["нарисуй", "сгенерируй картинку", "создай изображение", "картинка с", "нарисовать"])
 
         if is_image_request:
-            # Прямой вызов генерации изображения через Imagen 3
             result = client.models.generate_images(
                 model=IMAGE_MODEL,
                 prompt=message,
@@ -459,7 +508,6 @@ async def chat_endpoint(
             reply_text = "Вот что у меня получилось по вашему запросу:" if img_url else "Не удалось сгенерировать изображение."
             return {"reply": reply_text, "image_url": img_url}
 
-        # Обычный текстовый или мультимодальный чат через Gemini Flash
         formatted_history = []
         for h in hist_list:
             role = "user" if h["role"] == "user" else "model"
