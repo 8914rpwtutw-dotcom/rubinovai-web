@@ -105,7 +105,7 @@ async def get_chat_ui():
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             body { background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
-            /* Плашка "Сайт на обновлении" (активна по умолчанию при каждом открытии/обновлении) */
+            /* Плашка "Сайт на обновлении" - активна по умолчанию при открытии страницы */
             .site-update-overlay {
                 position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                 background: #000000; z-index: 99999; display: flex;
@@ -118,7 +118,7 @@ async def get_chat_ui():
                 border-top-color: #ffffff; border-radius: 50%; animation: spin 0.8s linear infinite;
             }
             .site-update-title { font-size: 1.6rem; font-weight: 800; color: #ffffff; text-transform: uppercase; letter-spacing: 1px; }
-            .site-update-subtitle { font-size: 0.95rem; color: #666666; font-weight: 500; }
+            .site-update-subtitle { font-size: 0.95rem; color: #666666; font-weight: 500; text-align: center; padding: 0 20px; }
             @keyframes spin { to { transform: rotate(360deg); } }
 
             .sidebar { width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; transition: transform 0.3s ease; z-index: 100; }
@@ -183,7 +183,6 @@ async def get_chat_ui():
             .file-preview-pill { display: inline-flex; align-items: center; gap: 6px; background: #181818; border: 1px solid #333; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; color: #ccc; margin-bottom: 8px; width: fit-content; }
             .file-preview-pill button { background: none; border: none; color: #888; cursor: pointer; font-weight: bold; font-size: 1rem; }
 
-            /* Input Area */
             .input-container { padding: 16px 20px; background: #000; }
             .input-box { background: #080808; border: 1px solid #1a1a1a; border-radius: 20px; display: flex; flex-direction: column; padding: 10px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
             .input-row { display: flex; align-items: center; gap: 10px; width: 100%; }
@@ -215,11 +214,11 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
-        <!-- Плашка обновления появляется при каждой загрузке и висит, пока сервер не ответит -->
+        <!-- Плашка обновления активна при открытии, пока сервер не ответит успехом -->
         <div id="siteUpdateOverlay" class="site-update-overlay">
             <div class="update-spinner"></div>
             <div class="site-update-title">Сайт на обновлении</div>
-            <div class="site-update-subtitle">Внедрение нового кода и инициализация...</div>
+            <div class="site-update-subtitle">Внедрение нового кода и инициализация сервера...</div>
         </div>
 
         <div id="sidebar" class="sidebar">
@@ -297,21 +296,19 @@ async def get_chat_ui():
             let selectedFile = null;
             let isImageMode = false;
 
-            // Проверка связи с сервером: плашка держится при обновлении/сборке кода, пока сервер не ответит
+            // Циклическая проверка: пока сервер собирается/перезапускается, плашка висит. Как только ответил — исчезает.
             async function checkServerReady() {
                 try {
                     const res = await fetch('/api/health');
                     if (res.ok) {
-                        // Сервер ответил успешно — плавно убираем плашку
                         setTimeout(() => {
                             document.getElementById('siteUpdateOverlay').classList.add('hidden');
                         }, 300);
                     } else {
-                        // Если сервер еще перезапускается или собирается, повторяем проверку через 1.5 сек
-                        setTimeout(checkServerReady, 1500);
+                        setTimeout(checkServerReady, 2000);
                     }
                 } catch (e) {
-                    setTimeout(checkServerReady, 1500);
+                    setTimeout(checkServerReady, 2000);
                 }
             }
 
