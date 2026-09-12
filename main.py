@@ -14,7 +14,7 @@ from google.genai import types
 app = FastAPI()
 
 SERVER_BUILD_ID = str(uuid.uuid4())[:8]
-IMAGE_GEN_ENABLED = True  # Флаг доступности генерации картинок
+IMAGE_GEN_ENABLED = True
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,7 +24,7 @@ app.add_middleware(
 )
 
 client = genai.Client()
-CHAT_MODEL = "gemini-3.1-flash-lite"
+CHAT_MODEL = "gemini-2.5-flash"
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
@@ -281,7 +281,7 @@ async def get_chat_ui():
                     <button class="menu-btn" onclick="toggleSidebar()">☰</button>
                     <div class="top-title-wrapper">
                         <div class="top-title" id="currentChatTitle">Новый диалог</div>
-                        <div class="model-badge">⚡ gemini-3.1-flash-lite</div>
+                        <div class="model-badge">⚡ gemini-2.5-flash</div>
                     </div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px;">
