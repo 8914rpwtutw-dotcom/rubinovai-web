@@ -154,16 +154,18 @@ async def get_chat_ui():
             .chats-list::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
             
             .chat-item { 
-                display: flex; align-items: center; justify-content: space-between; padding: 5px 8px; 
+                display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; 
                 border-radius: 6px; cursor: pointer; background: transparent; color: #999; font-size: 0.78rem; 
-                border: 1px solid transparent; transition: all 0.2s;
+                border: 1px solid transparent; transition: all 0.2s; position: relative;
             }
             .chat-item:hover { background: #121212; color: #ccc; }
             .chat-item.active { background: #1a1a1a; color: #f0f0f0; font-weight: 500; border-color: #2e2e2e; }
-            .chat-title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-            .delete-chat-btn { background: transparent; border: none; color: #666; font-size: 0.9rem; cursor: pointer; padding: 1px 4px; border-radius: 4px; opacity: 0; transition: opacity 0.2s; }
-            .chat-item:hover .delete-chat-btn { opacity: 1; }
-            .delete-chat-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+            .chat-title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; padding-right: 6px; }
+            .delete-chat-btn { 
+                background: transparent; border: none; color: #888; font-size: 1.1rem; cursor: pointer; 
+                padding: 0 6px; border-radius: 4px; line-height: 1; display: flex; align-items: center; justify-content: center;
+            }
+            .delete-chat-btn:hover { color: #ff5555; background: rgba(255,85,85,0.15); }
 
             .sidebar-footer { padding: 8px 4px; border-top: 1px solid #1f1f1f; display: flex; align-items: center; gap: 8px; font-size: 0.75rem; color: #666; }
             .status-dot { width: 6px; height: 6px; background: #22c55e; border-radius: 50%; box-shadow: 0 0 6px rgba(34, 197, 94, 0.4); }
@@ -191,15 +193,6 @@ async def get_chat_ui():
             .chat-messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; scroll-behavior: smooth; }
             .chat-messages::-webkit-scrollbar { width: 5px; }
             .chat-messages::-webkit-scrollbar-thumb { background: #222; border-radius: 4px; }
-            
-            .welcome-container { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; max-width: 480px; width: 100%; margin: auto; text-align: center; padding: 16px; }
-            .welcome-card { background: #0c0c0c; border: 1px solid #1a1a1a; border-radius: 16px; padding: 20px; width: 100%; box-shadow: 0 6px 20px rgba(0,0,0,0.4); }
-            .welcome-title { font-weight: 600; font-size: 1.05rem; color: #e0e0e0; margin-bottom: 4px; }
-            .welcome-subtitle { font-size: 0.8rem; color: #777; line-height: 1.4; }
-
-            .chips-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
-            .chip { background: #0a0a0a; border: 1px solid #1f1f1f; border-radius: 12px; padding: 10px 12px; color: #999; font-size: 0.78rem; cursor: pointer; text-align: left; transition: all 0.2s; display: flex; align-items: center; gap: 6px; }
-            .chip:hover { background: #161616; border-color: #333; color: #ddd; transform: translateY(-1px); }
 
             .message { padding: 12px 16px; border-radius: 14px; max-width: 80%; line-height: 1.5; overflow-wrap: break-word; font-size: 0.9rem; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
             .message.user { background: #222222 !important; color: #f0f0f0 !important; align-self: flex-end; border: 1px solid #333; border-bottom-right-radius: 4px; white-space: pre-wrap; }
@@ -242,7 +235,6 @@ async def get_chat_ui():
                 .sidebar.open { transform: translateX(0); }
                 .close-sidebar-btn { display: block; }
                 .menu-btn { display: inline-flex; }
-                .chips-grid { grid-template-columns: 1fr; }
                 .chat-messages { padding: 14px; }
                 .input-container { padding: 10px 14px 14px; }
                 .message { max-width: 90%; }
@@ -297,20 +289,7 @@ async def get_chat_ui():
                 </div>
             </div>
 
-            <div id="chatMessages" class="chat-messages">
-                <div class="welcome-container" id="welcomeContainer">
-                    <div class="welcome-card">
-                        <div class="welcome-title">Чем я могу помочь сегодня?</div>
-                        <div class="welcome-subtitle">Задайте вопрос, прикрепите файл или переключитесь в режим генерации изображений.</div>
-                    </div>
-                    <div class="chips-grid">
-                        <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
-                        <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
-                        <div class="chip" onclick="sendPreset('Составь план продуктивного дня')">📋 План дня</div>
-                        <div class="chip" onclick="sendPreset('Киберпанк город под дождем, неоновые вывески')">🎨 Нарисовать киберпанк</div>
-                    </div>
-                </div>
-            </div>
+            <div id="chatMessages" class="chat-messages"></div>
 
             <div class="input-container">
                 <div class="input-box">
@@ -387,32 +366,11 @@ async def get_chat_ui():
                 document.getElementById('filePreviewArea').innerHTML = '';
             }
 
-            function sendPreset(text) {
-                document.getElementById('userInput').value = text;
-                if (text.includes('Нарисовать')) {
-                    setMode('image');
-                }
-                sendMessage();
-            }
-
             function startNewChat() {
                 currentChatId = null;
                 localStorage.removeItem('rubinov_current_id');
                 document.getElementById('currentChatTitle').innerText = 'Новый диалог';
-                document.getElementById('chatMessages').innerHTML = `
-                    <div class="welcome-container" id="welcomeContainer">
-                        <div class="welcome-card">
-                            <div class="welcome-title">Чем я могу помочь сегодня?</div>
-                            <div class="welcome-subtitle">Задайте вопрос, прикрепите файл или переключитесь в режим генерации изображений.</div>
-                        </div>
-                        <div class="chips-grid">
-                            <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
-                            <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
-                            <div class="chip" onclick="sendPreset('Составь план продуктивного дня')">📋 План дня</div>
-                            <div class="chip" onclick="sendPreset('Киберпанк город под дождем, неоновые вывески')">🎨 Нарисовать киберпанк</div>
-                        </div>
-                    </div>
-                `;
+                document.getElementById('chatMessages').innerHTML = '';
                 renderChatsList();
                 if (window.innerWidth <= 768) toggleSidebar();
             }
@@ -431,16 +389,26 @@ async def get_chat_ui():
                 chats.forEach(chat => {
                     const div = document.createElement('div');
                     div.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
-                    div.innerHTML = `
-                        <span class="chat-title-text" onclick="loadChat('${chat.id}')">${chat.title}</span>
-                        <button class="delete-chat-btn" onclick="deleteChat(event, '${chat.id}')">×</button>
-                    `;
+                    
+                    const titleSpan = document.createElement('span');
+                    titleSpan.className = 'chat-title-text';
+                    titleSpan.innerText = chat.title;
+                    titleSpan.onclick = () => loadChat(chat.id);
+                    
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'delete-chat-btn';
+                    deleteBtn.innerText = '×';
+                    deleteBtn.onclick = (e) => deleteChat(e, chat.id);
+
+                    div.appendChild(titleSpan);
+                    div.appendChild(deleteBtn);
                     list.appendChild(div);
                 });
             }
 
             function deleteChat(e, id) {
                 e.stopPropagation();
+                e.preventDefault();
                 chats = chats.filter(c => c.id !== id);
                 localStorage.setItem('rubinov_chats', JSON.stringify(chats));
                 if (currentChatId === id) {
@@ -478,9 +446,6 @@ async def get_chat_ui():
                 const input = document.getElementById('userInput');
                 const text = input.value.trim();
                 if (!text && !selectedFile) return;
-
-                const welcome = document.getElementById('welcomeContainer');
-                if (welcome) welcome.remove();
 
                 const container = document.getElementById('chatMessages');
                 
