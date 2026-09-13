@@ -24,7 +24,7 @@ app.add_middleware(
 )
 
 client = genai.Client()
-CHAT_MODEL = "gemini-3.1-flash-lite"
+CHAT_MODEL = "gemini-3.6-flash"
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
@@ -282,7 +282,7 @@ async def get_chat_ui():
                     <button class="menu-btn" onclick="toggleSidebar()">☰</button>
                     <div class="top-title-wrapper">
                         <div class="top-title" id="currentChatTitle">Новый диалог</div>
-                        <div class="model-badge">⚡ gemini-3.1-flash-lite</div>
+                        <div class="model-badge">⚡ gemini-3.6-flash</div>
                     </div>
                 </div>
                 <div class="nav-right-group">
