@@ -39,14 +39,11 @@ async def health_check():
 
 @app.post("/api/title")
 async def generate_title(req: TitleRequest):
-    try:
-        response = client.models.generate_content(
-            model=CHAT_MODEL,
-            contents=f"Придумай короткое название (строго 2-3 слова, без кавычек, без списков) для чата, который начинается с этого сообщения: {req.message}"
-        )
-        return {"title": response.text.strip().replace('"', '').split('\n')[0]}
-    except Exception as e:
-        return {"title": req.message[:20] + "..."}
+    words = req.message.strip().split()
+    short_title = " ".join(words[:4])
+    if len(short_title) > 28:
+        short_title = short_title[:25] + "..."
+    return {"title": short_title if short_title else "Диалог"}
 
 @app.post("/api/generate-image")
 async def generate_image_endpoint(req: ImageGenRequest):
@@ -133,7 +130,6 @@ async def get_chat_ui():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>Rubinov-AI Assistant</title>
-        <!-- Подключаем Marked.js для красивого рендеринга Markdown -->
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
         <style>
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
@@ -209,7 +205,6 @@ async def get_chat_ui():
             .message.user { background: #222222 !important; color: #f0f0f0 !important; align-self: flex-end; border: 1px solid #333; border-bottom-right-radius: 4px; white-space: pre-wrap; }
             .message.ai { background: #0c0c0c; color: #c5c5c5; border: 1px solid #1f1f1f; align-self: flex-start; border-bottom-left-radius: 4px; }
             
-            /* Стили для отрендеренного Markdown внутри сообщений ИИ */
             .message.ai p { margin-bottom: 8px; }
             .message.ai p:last-child { margin-bottom: 0; }
             .message.ai ul, .message.ai ol { margin-left: 20px; margin-bottom: 8px; }
