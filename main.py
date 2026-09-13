@@ -4,7 +4,7 @@ import json
 import uuid
 import io
 import base64
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
@@ -13,9 +13,11 @@ from google.genai import types
 
 app = FastAPI()
 
-# Уникальный ID текущей сборки сервера
 SERVER_BUILD_ID = str(uuid.uuid4())[:8]
 IMAGE_GEN_ENABLED = True
+
+# Флаг готовности сервера (true сразу, но можно использовать для точечного контроля)
+SERVER_READY = True
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,6 +35,37 @@ class TitleRequest(BaseModel):
 
 class ImageGenRequest(BaseModel):
     prompt: str
+
+# Middleware, который во время перезагрузки/билда может перехватывать запросы
+@app.middleware("http")
+async def check_server_state(request: Request, call_next):
+    # Если сервер уходит на пересборку (можно выставить SERVER_READY = False)
+    if not SERVER_READY and request.url.path not in ["/api/health"]:
+        return HTMLResponse("""
+            <!DOCTYPE html>
+            <html lang="ru">
+            <head>
+                <meta charset="UTF-8">
+                <title>Сайт на обновлении</title>
+                <meta http-equiv="refresh" content="3">
+                <style>
+                    body { background: #000; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; margin: 0; }
+                    .spinner { width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 20px; }
+                    @keyframes spin { to { transform: rotate(360deg); } }
+                    h1 { font-size: 1.2rem; font-weight: 500; letter-spacing: 1px; color: #ccc; }
+                    p { font-size: 0.85rem; color: #666; margin-top: 8px; }
+                </style>
+            </head>
+            <body>
+                <div class="spinner"></div>
+                <h1>Сайт на обновлении...</h1>
+                <p>Идет сборка новой версии, страница обновится автоматически.</p>
+            </body>
+            </html>
+        """, status_code=503)
+    
+    response = await call_next(request)
+    return response
 
 @app.get("/api/health")
 async def health_check():
@@ -141,23 +174,6 @@ async def get_chat_ui():
             * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
             body {{ background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }}
             
-            /* Изначально класс .hidden убран, но мы добавим логику через JS */
-            .site-update-overlay {{
-                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-                background: #000000; z-index: 99999; display: flex;
-                flex-direction: column; align-items: center; justify-content: center;
-                gap: 20px; opacity: 0; pointer-events: none; transition: opacity 0.4s ease;
-            }}
-            .site-update-overlay.visible {{ opacity: 1; pointer-events: auto; }}
-            
-            .update-spinner {{
-                width: 56px; height: 56px; border: 3px solid rgba(255, 255, 255, 0.1);
-                border-top-color: #ffffff; border-radius: 50%; animation: spin 0.8s linear infinite;
-            }}
-            .site-update-title {{ font-size: 1.6rem; font-weight: 800; color: #ffffff; text-transform: uppercase; letter-spacing: 1px; }}
-            .site-update-subtitle {{ font-size: 0.95rem; color: #666666; font-weight: 500; text-align: center; padding: 0 20px; }}
-            @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
-
             .sidebar {{ width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; transition: transform 0.3s ease; z-index: 100; }}
             .logo-area {{ margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; padding: 0 8px; }}
             .logo-title {{ font-size: 1.1rem; font-weight: bold; color: #cccccc; }}
@@ -250,12 +266,6 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
-        <div id="siteUpdateOverlay" class="site-update-overlay">
-            <div class="update-spinner"></div>
-            <div class="site-update-title">Сайт на обновлении</div>
-            <div class="site-update-subtitle">Выполняется сборка сервера (Билд: <span id="buildIdText">{SERVER_BUILD_ID}</span>)...</div>
-        </div>
-
         <div id="sidebar" class="sidebar">
             <div class="logo-area">
                 <div>
@@ -290,4 +300,245 @@ async def get_chat_ui():
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <div class="mode-switch">
                         <button id="modeChat" class="mode-btn active" onclick="setMode('chat')">💬 Чат</button>
-                        <button id="modeImage" class="mode-btn" onclick
+                        <button id="modeImage" class="mode-btn" onclick="setMode('image')">🎨 Картинка</button>
+                    </div>
+                    <div id="aiStatusBadge" class="ai-status-badge">
+                        <span style="width: 6px; height: 6px; background: #fff; border-radius: 50%;"></span>
+                        ОБРАБОТКА...
+                    </div>
+                    <button class="clear-btn" onclick="clearCurrentChat()">Очистить</button>
+                </div>
+            </div>
+
+            <div id="chatMessages" class="chat-messages">
+                <div class="welcome-container" id="welcomeContainer">
+                    <div class="welcome-card">
+                        <div class="welcome-title">Чем я могу помочь сегодня?</div>
+                        <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключитесь в режим создания картинок.</div>
+                    </div>
+                    <div class="chips-grid">
+                        <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
+                        <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
+                        <div class="chip" onclick="sendPreset('Составь план продуктивного дня')">📋 План дня</div>
+                        <div class="chip" onclick="sendPreset('Киберпанк город под дождем, неоновые вывески')">🎨 Нарисовать киберпанк</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-container">
+                <div class="input-box">
+                    <div id="filePreviewArea"></div>
+                    <div class="input-row">
+                        <button class="attach-btn" title="Прикрепить файл" onclick="document.getElementById('fileInput').click()">📎</button>
+                        <input type="file" id="fileInput" style="display:none" onchange="handleFileSelect(event)">
+                        
+                        <textarea id="userInput" rows="1" placeholder="Введите сообщение..." oninput="autoResize(this)" onkeydown="handleKeyDown(event)"></textarea>
+                        
+                        <button id="sendBtn" class="send-btn" onclick="sendMessage()">Отправить</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            let chats = JSON.parse(localStorage.getItem('rubinov_chats') || '[]');
+            let currentChatId = localStorage.getItem('rubinov_current_id') || null;
+            let selectedFile = null;
+            let currentMode = 'chat';
+
+            function setMode(mode) {{
+                currentMode = mode;
+                document.getElementById('modeChat').classList.toggle('active', mode === 'chat');
+                document.getElementById('modeImage').classList.toggle('active', mode === 'image');
+                const textarea = document.getElementById('userInput');
+                textarea.placeholder = mode === 'image' ? 'Опишите картинку для генерации...' : 'Введите сообщение...';
+            }}
+
+            window.addEventListener('DOMContentLoaded', () => {{
+                renderChatsList();
+                if (currentChatId) {{
+                    loadChat(currentChatId);
+                }}
+            }});
+
+            function toggleSidebar() {{
+                document.getElementById('sidebar').classList.toggle('open');
+            }}
+
+            function autoResize(textarea) {{
+                textarea.style.height = 'auto';
+                textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+            }}
+
+            function handleKeyDown(e) {{
+                if (e.key === 'Enter' && !e.shiftKey) {{
+                    e.preventDefault();
+                    sendMessage();
+                }}
+            }}
+
+            function handleFileSelect(e) {{
+                const file = e.target.files[0];
+                if (!file) return;
+                selectedFile = file;
+                const previewArea = document.getElementById('filePreviewArea');
+                previewArea.innerHTML = `
+                    <div class="file-preview-pill">
+                        <span>📎 ${{file.name}}</span>
+                        <button onclick="removeFile()">×</button>
+                    </div>
+                `;
+            }}
+
+            function removeFile() {{
+                selectedFile = null;
+                document.getElementById('fileInput').value = '';
+                document.getElementById('filePreviewArea').innerHTML = '';
+            }}
+
+            function sendPreset(text) {{
+                document.getElementById('userInput').value = text;
+                if (text.includes('Нарисовать')) {{
+                    setMode('image');
+                }}
+                sendMessage();
+            }}
+
+            function startNewChat() {{
+                currentChatId = null;
+                localStorage.removeItem('rubinov_current_id');
+                document.getElementById('currentChatTitle').innerText = 'Новый диалог';
+                document.getElementById('chatMessages').innerHTML = `
+                    <div class="welcome-container" id="welcomeContainer">
+                        <div class="welcome-card">
+                            <div class="welcome-title">Чем я могу помочь сегодня?</div>
+                            <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключитесь в режим создания картинок.</div>
+                        </div>
+                        <div class="chips-grid">
+                            <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
+                            <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
+                            <div class="chip" onclick="sendPreset('Составь план продуктивного дня')">📋 План дня</div>
+                            <div class="chip" onclick="sendPreset('Киберпанк город под дождем, неоновые вывески')">🎨 Нарисовать киберпанк</div>
+                        </div>
+                    </div>
+                `;
+                renderChatsList();
+                if (window.innerWidth <= 768) toggleSidebar();
+            }}
+
+            function clearCurrentChat() {{
+                startNewChat();
+            }}
+
+            function renderChatsList() {{
+                const list = document.getElementById('chatsList');
+                list.innerHTML = '';
+                chats.forEach(chat => {{
+                    const div = document.createElement('div');
+                    div.className = `chat-item ${{chat.id === currentChatId ? 'active' : ''}}`;
+                    div.innerHTML = `
+                        <span class="chat-title-text" onclick="loadChat('${{chat.id}}')">${{chat.title}}</span>
+                        <button class="delete-chat-btn" onclick="deleteChat(event, '${{chat.id}}')">×</button>
+                    `;
+                    list.appendChild(div);
+                });
+            }}
+
+            function deleteChat(e, id) {{
+                e.stopPropagation();
+                chats = chats.filter(c => c.id !== id);
+                localStorage.setItem('rubinov_chats', JSON.stringify(chats));
+                if (currentChatId === id) {{
+                    startNewChat();
+                }} else {{
+                    renderChatsList();
+                }}
+            }}
+
+            function loadChat(id) {{
+                const chat = chats.find(c => c.id === id);
+                if (!chat) return;
+                currentChatId = id;
+                localStorage.setItem('rubinov_current_id', id);
+                document.getElementById('currentChatTitle').innerText = chat.title;
+                
+                const container = document.getElementById('chatMessages');
+                container.innerHTML = '';
+                chat.messages.forEach(m => {{
+                    const msgDiv = document.createElement('div');
+                    msgDiv.className = `message ${{m.role}}`;
+                    msgDiv.innerHTML = m.content;
+                    container.appendChild(msgDiv);
+                }});
+                container.scrollTop = container.scrollHeight;
+                renderChatsList();
+                if (window.innerWidth <= 768) toggleSidebar();
+            }}
+
+            async function sendMessage() {{
+                const input = document.getElementById('userInput');
+                const text = input.value.trim();
+                if (!text && !selectedFile) return;
+
+                const welcome = document.getElementById('welcomeContainer');
+                if (welcome) welcome.remove();
+
+                const container = document.getElementById('chatMessages');
+                
+                const userMsgDiv = document.createElement('div');
+                userMsgDiv.className = 'message user';
+                let displayContent = text;
+                if (selectedFile) {{
+                    displayContent = `[Файл: ${{selectedFile.name}}]<br>` + displayContent;
+                }}
+                userMsgDiv.innerHTML = displayContent;
+                container.appendChild(userMsgDiv);
+
+                input.value = '';
+                input.style.height = 'auto';
+                const fileToSend = selectedFile;
+                removeFile();
+
+                document.getElementById('aiStatusBadge').classList.add('active');
+                document.getElementById('sendBtn').disabled = true;
+                container.scrollTop = container.scrollHeight;
+
+                try {{
+                    let responseHtml = '';
+
+                    if (currentMode === 'image') {{
+                        const imgRes = await fetch('/api/generate-image', {{
+                            method: 'POST',
+                            headers: {{'Content-Type': 'application/json'}},
+                            body: JSON.stringify({{ prompt: text }})
+                        }});
+                        const imgData = await imgRes.json();
+                        if (!imgRes.ok) throw new Error(imgData.detail || 'Ошибка генерации картинки');
+                        responseHtml = `Сгенерированное изображение по запросу: "${{text}}"<br><img src="${{imgData.image_url}}" alt="Generated Image">`;
+                    }} else {{
+                        let currentHistory = [];
+                        if (currentChatId) {{
+                            const activeChat = chats.find(c => c.id === currentChatId);
+                            if (activeChat) {{
+                                currentHistory = activeChat.messages.map(m => ({{
+                                    role: m.role,
+                                    content: m.content
+                                }}));
+                            }}
+                        }}
+
+                        const formData = new FormData();
+                        formData.append('message', text);
+                        formData.append('history', JSON.stringify(currentHistory));
+                        if (fileToSend) {{
+                            formData.append('file', fileToSend);
+                        }}
+
+                        const res = await fetch('/api/chat', {{
+                            method: 'POST',
+                            body: formData
+                        }});
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || 'Ошибка сервера');
+                        responseHtml = data.response;
+                    }}
