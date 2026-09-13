@@ -24,7 +24,7 @@ app.add_middleware(
 )
 
 client = genai.Client()
-CHAT_MODEL = "gemini-3.6-flash"
+CHAT_MODEL = "gemini-3.1-flash-lite"  # Установлена актуальная модель Gemini 3.1 Flash-Lite
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
@@ -53,10 +53,10 @@ async def generate_image_endpoint(req: ImageGenRequest):
     if not IMAGE_GEN_ENABLED:
         raise HTTPException(status_code=403, detail="Генерация изображений временно отключена администратором.")
     try:
-        response = client.models.generate_image(
+        response = client.models.generate_images(
             model=IMAGEN_MODEL,
             prompt=req.prompt,
-            config=types.GenerateImageConfig(
+            config=types.GenerateImagesConfig(
                 number_of_images=1,
                 output_mime_type="image/jpeg",
                 aspect_ratio="1:1"
@@ -137,7 +137,6 @@ async def get_chat_ui():
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
             body { background: #050505; color: #c0c0c0; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
-            /* Sidebar */
             .sidebar { width: 300px; background: #0a0a0a; display: flex; flex-direction: column; border-right: 1px solid #1f1f1f; padding: 16px; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 100; }
             .logo-area { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; }
             .logo-title { font-size: 1.15rem; font-weight: 700; color: #e0e0e0; letter-spacing: 0.5px; }
@@ -171,7 +170,6 @@ async def get_chat_ui():
             .sidebar-footer { padding: 12px 8px; border-top: 1px solid #1f1f1f; display: flex; align-items: center; gap: 10px; font-size: 0.8rem; color: #666; }
             .status-dot { width: 7px; height: 7px; background: #22c55e; border-radius: 50%; box-shadow: 0 0 8px rgba(34, 197, 94, 0.4); }
 
-            /* Main Area */
             .main-content { flex: 1; display: flex; flex-direction: column; background: #050505; width: 100%; overflow: hidden; position: relative; }
             .top-nav { padding: 14px 20px; border-bottom: 1px solid #1f1f1f; display: flex; justify-content: space-between; align-items: center; background: #080808; min-height: 65px; }
             .top-left-group { display: flex; align-items: center; gap: 14px; }
@@ -192,7 +190,6 @@ async def get_chat_ui():
             .clear-btn { background: #141414; color: #999; border: 1px solid #2a2a2a; padding: 7px 14px; border-radius: 12px; cursor: pointer; font-size: 0.78rem; font-weight: 500; transition: all 0.2s; }
             .clear-btn:hover { background: #1f1f1f; color: #fff; border-color: #404040; }
 
-            /* Chat Messages */
             .chat-messages { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; scroll-behavior: smooth; }
             .chat-messages::-webkit-scrollbar { width: 6px; }
             .chat-messages::-webkit-scrollbar-thumb { background: #222; border-radius: 4px; }
@@ -211,7 +208,6 @@ async def get_chat_ui():
             .message.ai { background: #0c0c0c; color: #c5c5c5; border: 1px solid #1f1f1f; align-self: flex-start; border-bottom-left-radius: 4px; }
             .message img { max-width: 100%; border-radius: 12px; margin-top: 10px; display: block; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
             
-            /* Input Area */
             .input-container { padding: 16px 24px 24px; background: #050505; }
             .input-box { background: #0c0c0c; border: 1px solid #222; border-radius: 20px; display: flex; flex-direction: column; padding: 10px 14px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); transition: border-color 0.2s; }
             .input-box:focus-within { border-color: #444; }
@@ -231,11 +227,9 @@ async def get_chat_ui():
             .file-preview-pill button { background: none; border: none; color: #888; cursor: pointer; font-weight: bold; font-size: 1.1rem; line-height: 1; }
             .file-preview-pill button:hover { color: #fff; }
 
-            /* Overlay for mobile sidebar */
             .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(3px); z-index: 90; }
             .sidebar-overlay.active { display: block; }
 
-            /* Mobile Adaptation */
             @media (max-width: 768px) {
                 .sidebar { position: absolute; height: 100%; left: 0; top: 0; transform: translateX(-100%); width: 280px; box-shadow: 20px 0 40px rgba(0,0,0,0.8); }
                 .sidebar.open { transform: translateX(0); }
@@ -282,7 +276,7 @@ async def get_chat_ui():
                     <button class="menu-btn" onclick="toggleSidebar()">☰</button>
                     <div class="top-title-wrapper">
                         <div class="top-title" id="currentChatTitle">Новый диалог</div>
-                        <div class="model-badge">⚡ gemini-3.6-flash</div>
+                        <div class="model-badge">⚡ gemini-3.1-flash-lite</div>
                     </div>
                 </div>
                 <div class="nav-right-group">
