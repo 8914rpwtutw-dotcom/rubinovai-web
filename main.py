@@ -18,8 +18,8 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Список приоритетных моделей Gemini 2.5 / 2.0
-MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+# Актуальный список поддерживаемых моделей Gemini
+MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro"]
 
 current_key_idx = 0
 current_model_idx = 0
@@ -35,14 +35,14 @@ def get_api_keys():
     return [k.strip() for k in keys if k and k.strip()]
 
 def get_gemini_response(prompt: str) -> str:
-    """Последовательный перебор API-ключей и моделей"""
+    """Последовательный перебор API-ключей и поддерживаемых моделей"""
     global current_key_idx, current_model_idx
     
     api_keys = get_api_keys()
     if not api_keys:
         raise HTTPException(
             status_code=500,
-            detail="API-ключи не найдены в Environment Variables на Render."
+            detail="API-ключи не найдены в Environment Variables."
         )
 
     num_keys = len(api_keys)
@@ -56,7 +56,7 @@ def get_gemini_response(prompt: str) -> str:
         active_model = MODELS[current_model_idx % num_models]
 
         try:
-            # Вызов клиента библиотеки google-genai
+            # Инициализация клиента google-genai
             client = genai.Client(api_key=active_key)
             
             response = client.models.generate_content(
@@ -69,11 +69,11 @@ def get_gemini_response(prompt: str) -> str:
             last_error_msg = str(e)
             print(f"[API Error {e.code}] Модель {active_model}: {e.message}")
             
-            # Если модель не найдена (404), переключаем модель на следующую
-            if e.code == 404 or "not found" in str(e).lower():
+            # При 404 (модель устарела/не найдена) переходим к следующей модели
+            if e.code == 404 or "not found" in str(e).lower() or "no longer available" in str(e).lower():
                 current_model_idx = (current_model_idx + 1) % num_models
                 continue
-            # Если лимит исчерпан (429), переключаем ключ
+            # При 429 (лимит запросов) переходим к следующему ключу
             elif e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
                 current_model_idx += 1
                 if current_model_idx >= num_models:
@@ -297,9 +297,9 @@ async def get_chat_ui():
             
             .msg-error { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); color: #fca5a5; }
 
-            /* Компактная плашка ожидания */
+            /* Плашка ожидания */
             .msg-bot.msg-thinking {
-                padding: 6px 10px;
+                padding: 8px 12px;
                 border-radius: 10px;
                 display: inline-flex;
                 align-items: center;
@@ -309,7 +309,7 @@ async def get_chat_ui():
             }
 
             .thinking-indicator { display: flex; align-items: center; gap: 4px; }
-            .thinking-dot { width: 4px; height: 4px; background-color: var(--accent); border-radius: 50%; animation: pulse 1.4s infinite ease-in-out both; }
+            .thinking-dot { width: 5px; height: 5px; background-color: var(--accent); border-radius: 50%; animation: pulse 1.4s infinite ease-in-out both; }
             .thinking-dot:nth-child(1) { animation-delay: -0.32s; }
             .thinking-dot:nth-child(2) { animation-delay: -0.16s; }
 
@@ -388,7 +388,7 @@ async def get_chat_ui():
 
             <div id="chats-list">
                 <div class="chat-item">
-                    <span>Закат в нейросети</span>
+                    <span>Текущая сессия</span>
                     <span class="close-btn" onclick="deleteChat(this)">×</span>
                 </div>
             </div>
@@ -450,7 +450,7 @@ async def get_chat_ui():
                 input.value = '';
                 chat.scrollTop = chat.scrollHeight;
 
-                // Плашка ожидания
+                // Индикатор ответа
                 const botRow = document.createElement('div');
                 botRow.className = 'msg-row bot-row';
                 const botMsg = document.createElement('div');
