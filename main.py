@@ -324,7 +324,7 @@ async def get_chat_ui():
 
         <script>
             let chats = JSON.parse(localStorage.getItem('rubinov_chats') || '[]');
-            let currentChatId = localStorage.getItem('rubinov_current_id') || null;
+            let currentChatId = null;
             let selectedFile = null;
             let currentMode = 'chat';
 
@@ -338,8 +338,11 @@ async def get_chat_ui():
 
             window.addEventListener('DOMContentLoaded', () => {
                 renderChatsList();
-                if (currentChatId) {
-                    loadChat(currentChatId);
+                const savedId = localStorage.getItem('rubinov_current_id');
+                if (savedId && chats.some(c => c.id === savedId)) {
+                    loadChat(savedId);
+                } else {
+                    startNewChat();
                 }
             });
 
