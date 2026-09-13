@@ -1,7 +1,6 @@
 import os
 import time
 import uuid
-import io
 import base64
 from typing import Optional
 from fastapi import FastAPI, HTTPException, File, Form, UploadFile
@@ -215,12 +214,11 @@ async def get_chat_ui():
             }
             .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; padding: 0 4px; }
             
-            /* Стили логотипа вместо буквы R */
-            .brand-logo { 
+            /* Иконка-логотип из SVG */
+            .brand-logo-svg { 
                 width: 36px; height: 36px; 
-                border-radius: 10px;
-                object-fit: contain;
-                filter: drop-shadow(0 2px 8px rgba(239, 68, 68, 0.3));
+                filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.5));
+                flex-shrink: 0;
             }
             
             .brand h2 { font-size: 15px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; }
@@ -274,7 +272,6 @@ async def get_chat_ui():
                 position: relative;
             }
 
-            /* Welcome Screen c крупным логотипом */
             .welcome-screen {
                 position: absolute;
                 top: 40%;
@@ -290,10 +287,9 @@ async def get_chat_ui():
                 align-items: center;
                 gap: 12px;
             }
-            .welcome-avatar {
-                width: 72px; height: 72px;
-                object-fit: contain;
-                filter: drop-shadow(0 4px 16px rgba(239, 68, 68, 0.4));
+            .welcome-avatar-svg {
+                width: 80px; height: 80px;
+                filter: drop-shadow(0 0 20px rgba(239, 68, 68, 0.6));
                 margin-bottom: 4px;
             }
             .welcome-screen h1 { font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; }
@@ -370,8 +366,19 @@ async def get_chat_ui():
 
         <div id="sidebar">
             <div class="brand">
-                <!-- Заменили R на изображение логотипа -->
-                <img src="/logo.png" alt="Logo" class="brand-logo" />
+                <!-- Встроенный SVG-логотип Рубин с мозгом -->
+                <svg class="brand-logo-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="rubyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#ff4b4b" />
+                            <stop offset="100%" stop-color="#900c3f" />
+                        </linearGradient>
+                    </defs>
+                    <path d="M50 10 L85 35 L50 90 L15 35 Z" stroke="url(#rubyGrad)" stroke-width="4" fill="none" />
+                    <path d="M15 35 L85 35 M50 10 L32 35 M50 10 L68 35 M50 90 L32 35 M50 90 L68 35" stroke="url(#rubyGrad)" stroke-width="2.5" opacity="0.7" />
+                    <circle cx="50" cy="48" r="14" fill="#ff4b4b" opacity="0.25" />
+                    <path d="M42 45 Q46 40 50 45 Q54 40 58 45 Q60 52 50 56 Q40 52 42 45 Z" stroke="#ffffff" stroke-width="2.5" fill="none" />
+                </svg>
                 <div>
                     <h2>Rubinov AI</h2>
                     <span>Next-Gen Assistant</span>
@@ -414,7 +421,6 @@ async def get_chat_ui():
                         <button onclick="removeSelectedFile()">✕</button>
                     </div>
                     <div class="input-row">
-                        <!-- Вызов камеры на мобильных устройствах через capture="environment" -->
                         <input type="file" id="file-input" accept="image/*" capture="environment" style="display: none;" onchange="handleFileSelect(event)" />
                         <button id="file-btn" onclick="document.getElementById('file-input').click()" title="Сделать фото или прикрепить файл">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -520,7 +526,12 @@ async def get_chat_ui():
                     const welcome = document.createElement('div');
                     welcome.className = 'welcome-screen';
                     welcome.innerHTML = `
-                        <img src="/logo.png" alt="Rubinov AI Logo" class="welcome-avatar" />
+                        <svg class="welcome-avatar-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M50 10 L85 35 L50 90 L15 35 Z" stroke="url(#rubyGrad)" stroke-width="4" fill="none" />
+                            <path d="M15 35 L85 35 M50 10 L32 35 M50 10 L68 35 M50 90 L32 35 M50 90 L68 35" stroke="url(#rubyGrad)" stroke-width="2.5" opacity="0.7" />
+                            <circle cx="50" cy="48" r="14" fill="#ff4b4b" opacity="0.25" />
+                            <path d="M42 45 Q46 40 50 45 Q54 40 58 45 Q60 52 50 56 Q40 52 42 45 Z" stroke="#ffffff" stroke-width="2.5" fill="none" />
+                        </svg>
                         <h1>Привет! Я Rubinov AI</h1>
                         <p>Чем я могу помочь тебе сегодня? Могу ответить на вопросы, обработать файлы или нарисовать картинку.</p>
                     `;
