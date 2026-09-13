@@ -15,13 +15,17 @@ from google.genai import types
 
 app = FastAPI()
 
+# Уникальный ID текущей сборки (меняется при каждом перезапуске сервера)
 SERVER_BUILD_ID = str(uuid.uuid4())[:8]
 IMAGE_GEN_ENABLED = True
 
+# Данные текущего деплоя Render.
+# Render передаёт их автоматически для Git-репозитория.
 CURRENT_COMMIT = os.environ.get("RENDER_GIT_COMMIT", "")
 CURRENT_BRANCH = os.environ.get("RENDER_GIT_BRANCH", "")
 CURRENT_REPO_SLUG = os.environ.get("RENDER_GIT_REPO_SLUG", "")
 
+# Небольшой кэш, чтобы не обращаться к GitHub API слишком часто.
 DEPLOY_STATUS_CACHE = {
     "checked_at": 0.0,
     "latest_commit": None,
@@ -37,7 +41,7 @@ app.add_middleware(
 )
 
 client = genai.Client()
-CHAT_MODEL = "gemini-3.1-flash-lite"  # Переключено на актуальную модель Flash-Lite
+CHAT_MODEL = "gemini-2.5-flash" # Используем актуальную модель
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
@@ -47,6 +51,11 @@ class ImageGenRequest(BaseModel):
     prompt: str
 
 def get_latest_github_commit():
+    """
+    Возвращает HEAD-коммит ветки из GitHub.
+    На Render это позволяет старой версии приложения заметить,
+    что в GitHub уже появился новый коммит и начался deploy.
+    """
     now = time.time()
 
     if (
@@ -91,6 +100,12 @@ def get_latest_github_commit():
 
 @app.get("/api/deploy-status")
 async def deploy_status():
+    """
+    Состояние обновления:
+    - updating=True, если GitHub уже указывает на более новый commit,
+      чем тот, на котором сейчас работает Render.
+    - updating=False и commit отличается, когда новая версия уже запущена.
+    """
     latest_commit, error = get_latest_github_commit()
 
     is_building = bool(
@@ -409,7 +424,7 @@ async def get_chat_ui():
                     <button class="menu-btn" onclick="toggleSidebar()">☰</button>
                     <div class="top-title-wrapper">
                         <div class="top-title" id="currentChatTitle">Новый диалог</div>
-                        <div class="model-badge">⚡ gemini-3.1-flash-lite</div>
+                        <div class="model-badge">⚡ gemini-2.5-flash</div>
                     </div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px;">
@@ -456,7 +471,7 @@ async def get_chat_ui():
         </div>
 
         <script>
-            const CURRENT_BUILD_ID = "{SERVER_BUILD_ID}";
+            // Фиксируем версию страницы, с которой пользователь сейчас работает.
             const CURRENT_DEPLOY_COMMIT = "{CURRENT_COMMIT}";
 
             let deployUpdatingShown = false;
@@ -480,6 +495,7 @@ async def get_chat_ui():
                 const url = new URL(window.location.href);
                 url.searchParams.set('_updated', Date.now().toString());
 
+                console.log("Новая версия Render запущена. Выполняю жёсткое обновление страницы...");
                 window.location.replace(url.toString());
             }}
 
@@ -494,6 +510,8 @@ async def get_chat_ui():
 
                     const data = await res.json();
 
+                    // В GitHub появился новый commit, а текущий Render-инстанс
+                    // ещё работает на старом: значит идёт сборка/деплой.
                     if (data.updating) {{
                         if (!deployUpdatingShown) {{
                             deployUpdatingShown = true;
@@ -505,26 +523,34 @@ async def get_chat_ui():
                         return;
                     }}
 
+                    // Если новая версия уже запущена, endpoint будет возвращать
+                    // новый current_commit, отличный от commit старой страницы.
                     const newVersionStarted =
                         CURRENT_DEPLOY_COMMIT &&
                         data.current_commit &&
                         data.current_commit !== CURRENT_DEPLOY_COMMIT;
 
-                    const backendRestarted =
-                        data.build_id &&
-                        data.build_id !== CURRENT_BUILD_ID;
-
-                    if (newVersionStarted || backendRestarted) {{
+                    // Перезагружаем только когда действительно запущен
+                    // новый Git commit. Случайный SERVER_BUILD_ID здесь
+                    // намеренно НЕ используется: при нескольких инстансах
+                    // Render он может отличаться без нового деплоя.
+                    if (newVersionStarted) {{
                         setDeployOverlay(
                             true,
                             'Сборка завершена. Перезапускаю сайт и загружаю новую версию...'
                         );
 
+                        // Небольшая пауза позволяет Render полностью переключить трафик
+                        // на новый экземпляр перед повторной загрузкой страницы.
                         setTimeout(hardReloadAfterDeploy, 350);
                     }}
-                }} catch (e) {{}}
+                }} catch (e) {{
+                    // Во время переключения Render API может кратковременно
+                    // быть недоступно — следующая проверка продолжит мониторинг.
+                }}
             }}
 
+            // Первый запуск сразу и затем каждые 4 секунды.
             checkDeployStatus();
             setInterval(checkDeployStatus, 4000);
 
@@ -628,7 +654,7 @@ async def get_chat_ui():
                         <button class="delete-chat-btn" onclick="deleteChat(event, '${{chat.id}}')">×</button>
                     `;
                     list.appendChild(div);
-                });
+                }});
             }}
 
             function deleteChat(e, id) {{
