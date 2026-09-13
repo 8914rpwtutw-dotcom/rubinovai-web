@@ -18,32 +18,24 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Модели в порядке приоритета для каждого ключа
-MODELS = ["gemini-2.0-flash", "gemini-1.5-flash"]
+# Актуальная модель Gemini 3.6 Flash
+MODELS = ["gemini-3.6-flash"]
 
-# Глобальные индексы для точной последовательности
 current_key_idx = 0
 current_model_idx = 0
 
 def get_api_keys():
-    """Собираем валидные API-ключи"""
+    """Собираем API-ключи из окружения"""
     keys = [
         os.getenv("GEMINI_KEY_1"),
         os.getenv("GEMINI_KEY_2"),
+        os.getenv("GEMINI_KEY_3"),
         os.getenv("GEMINI_API_KEY")
     ]
-    valid_keys = [k.strip() for k in keys if k and k.strip()]
-    return valid_keys
+    return [k.strip() for k in keys if k and k.strip()]
 
 def get_gemini_response(prompt: str) -> str:
-    """
-    Каскадная логика:
-    Ключ 1 -> gemini-2.0-flash
-    Ключ 1 -> gemini-1.5-flash
-    Ключ 2 -> gemini-2.0-flash
-    Ключ 2 -> gemini-1.5-flash
-    ... и по кругу заново
-    """
+    """Последовательный ротационный перебор ключей"""
     global current_key_idx, current_model_idx
     
     api_keys = get_api_keys()
@@ -55,11 +47,9 @@ def get_gemini_response(prompt: str) -> str:
 
     num_keys = len(api_keys)
     num_models = len(MODELS)
-    total_steps = num_keys * num_models
-    steps_tried = 0
+    total_attempts = num_keys * num_models
 
-    while steps_tried < total_steps:
-        # Текущий ключ и текущая модель
+    for _ in range(total_attempts):
         active_key = api_keys[current_key_idx % num_keys]
         active_model = MODELS[current_model_idx % num_models]
 
@@ -72,16 +62,18 @@ def get_gemini_response(prompt: str) -> str:
             return response.text
 
         except APIError as e:
-            if e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
-                print(f"[Quota Exceeded] Ключ #{current_key_idx + 1}, модель {active_model} исчерпана. Переключаем...")
-                
-                # Логика сдвига: сначала пробуем 1.5 флеш на текущем ключе, затем следующий ключ
+            if e.code == 404:
+                print(f"[API Error] Модель {active_model} недоступна (404).")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Модель {active_model} недоступна. Проверьте правильность настройки API."
+                )
+            elif e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
+                print(f"[Quota] Ключ #{current_key_idx + 1} ({active_model}) исчерпан. Переключаем...")
                 current_model_idx += 1
                 if current_model_idx >= num_models:
                     current_model_idx = 0
                     current_key_idx = (current_key_idx + 1) % num_keys
-                
-                steps_tried += 1
                 continue
             else:
                 print(f"[API Error] {e}")
@@ -90,16 +82,9 @@ def get_gemini_response(prompt: str) -> str:
             print(f"[Unexpected Error] {e}")
             break
 
-        # В случае нетипичной ошибки переходим к следующему шагу
-        current_model_idx += 1
-        if current_model_idx >= num_models:
-            current_model_idx = 0
-            current_key_idx = (current_key_idx + 1) % num_keys
-        steps_tried += 1
-
     raise HTTPException(
         status_code=429,
-        detail="Все ключи и модели исчерпали лимиты. Попробуйте через 1-2 минуты."
+        detail="Все доступные API-ключи исчерпали лимиты. Подождите 1 минуту перед следующим запросом."
     )
 
 # ------------------------------------------------------------------
@@ -122,7 +107,7 @@ async def chat_endpoint(payload: ChatPayload):
     return {"response": answer}
 
 # ------------------------------------------------------------------
-#  HTML/CSS/JS ИНТЕРФЕЙС (Точная копия интерфейса со скриншота)
+#  HTML/CSS/JS ИНТЕРФЕЙС
 # ------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
@@ -177,6 +162,17 @@ async def get_chat_ui():
             .msg-bot { background: #0c0e12; border: 1px solid #1e242d; color: #e2e8f0; border-radius: 12px; padding: 16px 20px; font-size: 14px; max-width: 85%; font-family: monospace; white-space: pre-wrap; line-height: 1.5; }
             .msg-error { background: #2a1215; border-color: #5c1d24; color: #f87171; }
 
+            /* Typing / Thinking Animation */
+            .thinking-indicator { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+            .thinking-dot { width: 8px; height: 8px; background-color: #3b82f6; border-radius: 50%; animation: pulse 1.4s infinite ease-in-out both; }
+            .thinking-dot:nth-child(1) { animation-delay: -0.32s; }
+            .thinking-dot:nth-child(2) { animation-delay: -0.16s; }
+
+            @keyframes pulse {
+                0%, 80%, 100% { transform: scale(0.4); opacity: 0.3; }
+                40% { transform: scale(1); opacity: 1; }
+            }
+
             /* Input Area */
             #input-container { padding: 16px 24px 24px 24px; display: flex; gap: 12px; align-items: center; }
             #prompt-input { flex: 1; background: #0b0d0f; border: 1px solid #1e242d; border-radius: 12px; padding: 14px 18px; color: #ffffff; font-size: 14px; outline: none; transition: 0.2s; }
@@ -222,7 +218,7 @@ async def get_chat_ui():
             <div id="chat-container"></div>
 
             <div id="input-container">
-                <input type="text" idprompt-input" id="prompt-input" placeholder="Введите сообщение..." onkeydown="handleKeyPress(event)" />
+                <input type="text" id="prompt-input" placeholder="Введите сообщение..." onkeydown="handleKeyPress(event)" />
                 <button class="btn-send" onclick="sendMessage()">Отправить</button>
             </div>
         </div>
@@ -262,12 +258,20 @@ async def get_chat_ui():
                 input.value = '';
                 chat.scrollTop = chat.scrollHeight;
 
-                // Блок ответа бота
+                // Создание блока ответа с АНИМАЦИЕЙ
                 const botRow = document.createElement('div');
                 botRow.className = 'msg-row bot-row';
                 const botMsg = document.createElement('div');
                 botMsg.className = 'msg-bot';
-                botMsg.textContent = 'Думаю...';
+                
+                botMsg.innerHTML = `
+                    <div class="thinking-indicator">
+                        <div class="thinking-dot"></div>
+                        <div class="thinking-dot"></div>
+                        <div class="thinking-dot"></div>
+                    </div>
+                `;
+                
                 botRow.appendChild(botMsg);
                 chat.appendChild(botRow);
                 chat.scrollTop = chat.scrollHeight;
