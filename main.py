@@ -1,11 +1,14 @@
 import os
 import time
 import uuid
-from fastapi import FastAPI, HTTPException
+import io
+import base64
+from typing import Optional
+from fastapi import FastAPI, HTTPException, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
 from google import genai
+from google.genai import types
 from google.genai.errors import APIError
 
 app = FastAPI()
@@ -33,9 +36,41 @@ def get_api_keys():
     ]
     return [k.strip() for k in keys if k and k.strip()]
 
-def get_gemini_response(prompt: str) -> str:
+def get_gemini_client(api_key: str):
+    return genai.Client(api_key=api_key)
+
+def generate_image_response(prompt: str) -> Optional[str]:
+    api_keys = get_api_keys()
+    for key in api_keys:
+        try:
+            client = get_gemini_client(key)
+            result = client.models.generate_images(
+                model='imagen-3.0-generate-002',
+                prompt=prompt,
+                config=types.GenerateImagesConfig(
+                    number_of_images=1,
+                    output_mime_type="image/jpeg",
+                    aspect_ratio="1:1"
+                )
+            )
+            if result.generated_images:
+                img_bytes = result.generated_images[0].image.image_bytes
+                base64_img = base64.b64encode(img_bytes).decode('utf-8')
+                return f'<img src="data:image/jpeg;base64,{base64_img}" alt="Generated Image" style="max-width:100%; border-radius:12px; margin-top:8px;" />'
+        except Exception:
+            continue
+    return None
+
+def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_type: Optional[str] = None) -> str:
     global current_key_idx, current_model_idx
     
+    # Проверка запроса на генерацию изображения
+    lowered = prompt.lower()
+    if any(kw in lowered for kw in ["нарисуй", "сгенерируй картинку", "создай картинку", "нарисуй изображение", "draw", "generate image"]):
+        img_html = generate_image_response(prompt)
+        if img_html:
+            return f"Вот ваше сгенерированное изображение:\n\n{img_html}"
+
     api_keys = get_api_keys()
     if not api_keys:
         raise HTTPException(
@@ -47,59 +82,65 @@ def get_gemini_response(prompt: str) -> str:
     num_models = len(MODELS)
     total_attempts = num_keys * num_models * 2
 
-    last_error_msg = ""
+    contents = []
+    if file_bytes and mime_type:
+        contents.append(types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+    if prompt:
+        contents.append(prompt)
 
     for attempt in range(total_attempts):
         active_key = api_keys[current_key_idx % num_keys]
         active_model = MODELS[current_model_idx % num_models]
 
         try:
-            client = genai.Client(api_key=active_key)
+            client = get_gemini_client(active_key)
             response = client.models.generate_content(
                 model=active_model,
-                contents=prompt
+                contents=contents
             )
             return response.text
 
         except APIError as e:
-            last_error_msg = str(e)
-            
             if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e) or "high demand" in str(e).lower():
                 current_model_idx += 1
                 if current_model_idx >= num_models:
                     current_model_idx = 0
                     current_key_idx = (current_key_idx + 1) % num_keys
-                
                 time.sleep(0.5)
                 continue
-                
-            elif e.code == 404 or "not found" in str(e).lower() or "no longer available" in str(e).lower():
+            elif e.code == 404 or "not found" in str(e).lower():
                 current_model_idx = (current_model_idx + 1) % num_models
                 continue
             else:
                 break
-        except Exception as e:
-            last_error_msg = str(e)
+        except Exception:
             break
 
     raise HTTPException(
         status_code=500,
-        detail="Сервис ИИ перегружен в данный момент. Пожалуйста, повторите попытку через несколько секунд."
+        detail="Сервис ИИ перегружен в данный момент. Повторите попытку через несколько секунд."
     )
-
-class ChatPayload(BaseModel):
-    prompt: str
 
 @app.get("/health")
 def health_check():
     return {"status": "ok", "build_id": SERVER_BUILD_ID}
 
 @app.post("/api/chat")
-async def chat_endpoint(payload: ChatPayload):
-    if not payload.prompt.strip():
-        raise HTTPException(status_code=400, detail="Текст запроса не может быть пустым")
+async def chat_endpoint(
+    prompt: str = Form(""),
+    file: Optional[UploadFile] = File(None)
+):
+    if not prompt.strip() and not file:
+        raise HTTPException(status_code=400, detail="Запрос или файл обязателен")
     
-    answer = get_gemini_response(payload.prompt)
+    file_bytes = None
+    mime_type = None
+    
+    if file:
+        file_bytes = await file.read()
+        mime_type = file.content_type
+
+    answer = get_gemini_response(prompt, file_bytes, mime_type)
     return {"response": answer}
 
 @app.get("/", response_class=HTMLResponse)
@@ -128,36 +169,36 @@ async def get_chat_ui():
                 --text-muted: #94a3b8;
                 --user-msg-bg: #1e2235;
                 --bot-msg-bg: #11131c;
+                --scrollbar-thumb: #050608; /* Аккуратный овал более тёмный, чем фон */
             }
 
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
             html, body { height: 100%; height: 100dvh; overflow: hidden; background: var(--bg-main); color: var(--text-main); }
             body { display: flex; position: relative; }
 
-            /* Кастомный красивый скроллбар (Chrome, Safari, Edge) */
+            /* Кастомный овальный тёмный скроллбар */
             ::-webkit-scrollbar {
-                width: 6px;
-                height: 6px;
+                width: 7px;
+                height: 7px;
             }
             ::-webkit-scrollbar-track {
                 background: transparent;
             }
             ::-webkit-scrollbar-thumb {
-                background: rgba(99, 102, 241, 0.35);
-                border-radius: 10px;
-                transition: background 0.2s ease;
+                background: var(--scrollbar-thumb);
+                border-radius: 20px;
+                border: 1px solid rgba(255, 255, 255, 0.05);
             }
             ::-webkit-scrollbar-thumb:hover {
-                background: rgba(99, 102, 241, 0.65);
+                background: #000000;
             }
 
-            /* Кастомный скроллбар для Firefox */
             * {
                 scrollbar-width: thin;
-                scrollbar-color: rgba(99, 102, 241, 0.35) transparent;
+                scrollbar-color: var(--scrollbar-thumb) transparent;
             }
 
-            /* Overlay for Mobile Sidebar */
+            /* Overlay Mobile Sidebar */
             #sidebar-overlay {
                 display: none;
                 position: fixed;
@@ -171,10 +212,7 @@ async def get_chat_ui():
                 opacity: 0;
                 transition: opacity 0.3s ease;
             }
-            #sidebar-overlay.active {
-                display: block;
-                opacity: 1;
-            }
+            #sidebar-overlay.active { display: block; opacity: 1; }
 
             /* Sidebar */
             #sidebar { 
@@ -188,48 +226,25 @@ async def get_chat_ui():
                 transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
                 height: 100dvh;
             }
-            .brand { 
-                display: flex; 
-                align-items: center; 
-                gap: 12px; 
-                margin-bottom: 24px; 
-                padding: 0 4px;
-            }
+            .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; padding: 0 4px; }
             .brand-logo { 
-                width: 32px; 
-                height: 32px; 
+                width: 32px; height: 32px; 
                 background: linear-gradient(135deg, #6366f1, #a855f7); 
-                border-radius: 10px; 
-                display: flex; 
-                align-items: center; 
-                justify-content: center; 
-                font-weight: 700; 
-                font-size: 16px; 
-                color: #fff;
+                border-radius: 10px; display: flex; align-items: center; justify-content: center; 
+                font-weight: 700; font-size: 16px; color: #fff;
                 box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
             }
             .brand h2 { font-size: 15px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; }
             .brand span { font-size: 11px; color: var(--text-muted); font-weight: 500; display: block; }
 
             .btn-new-chat { 
-                background: rgba(255, 255, 255, 0.04); 
-                color: #ffffff; 
-                border: 1px solid var(--border-color); 
-                padding: 12px 16px; 
-                border-radius: 12px; 
-                font-size: 13px; 
-                font-weight: 600; 
-                cursor: pointer; 
-                display: flex; 
-                align-items: center; 
-                gap: 8px; 
-                margin-bottom: 24px; 
-                transition: all 0.2s ease; 
+                background: rgba(255, 255, 255, 0.04); color: #ffffff; 
+                border: 1px solid var(--border-color); padding: 12px 16px; 
+                border-radius: 12px; font-size: 13px; font-weight: 600; 
+                cursor: pointer; display: flex; align-items: center; gap: 8px; 
+                margin-bottom: 20px; transition: all 0.2s ease; 
             }
-            .btn-new-chat:hover { 
-                background: rgba(255, 255, 255, 0.08); 
-                border-color: var(--border-hover); 
-            }
+            .btn-new-chat:hover { background: rgba(255, 255, 255, 0.08); border-color: var(--border-hover); }
 
             .chats-header { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); font-weight: 700; margin-bottom: 12px; padding: 0 4px; text-transform: uppercase; letter-spacing: 0.8px; }
             
@@ -237,17 +252,13 @@ async def get_chat_ui():
             .chat-item { 
                 background: rgba(255, 255, 255, 0.02); 
                 border: 1px solid var(--border-color); 
-                border-radius: 10px; 
-                padding: 10px 12px; 
-                font-size: 13px; 
-                color: #cbd5e1; 
-                display: flex; 
-                justify-content: space-between; 
-                align-items: center; 
-                cursor: pointer; 
-                transition: all 0.2s;
+                border-radius: 10px; padding: 10px 12px; 
+                font-size: 13px; color: #cbd5e1; 
+                display: flex; justify-content: space-between; align-items: center; 
+                cursor: pointer; transition: all 0.2s;
             }
-            .chat-item:hover { background: rgba(255, 255, 255, 0.06); color: #ffffff; border-color: var(--border-hover); }
+            .chat-item.active { background: rgba(99, 102, 241, 0.15); border-color: var(--accent); color: #ffffff; }
+            .chat-item:hover { background: rgba(255, 255, 255, 0.06); color: #ffffff; }
             .chat-item .close-btn { color: var(--text-muted); font-size: 16px; cursor: pointer; border-radius: 4px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; }
             .chat-item .close-btn:hover { color: #f87171; background: rgba(248, 113, 113, 0.1); }
 
@@ -255,213 +266,91 @@ async def get_chat_ui():
             .status-dot { width: 8px; height: 8px; background: #10b981; border-radius: 50%; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
 
             /* Main Area */
-            #main { 
-                flex: 1; 
-                display: flex; 
-                flex-direction: column; 
-                background: var(--bg-main); 
-                position: relative; 
-                height: 100dvh; 
-                overflow: hidden;
-            }
+            #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100dvh; overflow: hidden; }
             
             #chat-header { 
-                height: 60px; 
-                min-height: 60px;
+                height: 60px; min-height: 60px;
                 border-bottom: 1px solid var(--border-color); 
-                display: flex; 
-                align-items: center; 
-                justify-content: space-between; 
-                padding: 0 20px; 
-                background: rgba(15, 17, 23, 0.85); 
-                backdrop-filter: blur(12px);
-                z-index: 10;
+                display: flex; align-items: center; justify-content: space-between; 
+                padding: 0 20px; background: rgba(15, 17, 23, 0.85); 
+                backdrop-filter: blur(12px); z-index: 10;
             }
             .header-left { display: flex; align-items: center; gap: 12px; }
-            .menu-toggle {
-                display: none;
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid var(--border-color);
-                color: #ffffff;
-                border-radius: 8px;
-                padding: 8px;
-                cursor: pointer;
-                align-items: center;
-                justify-content: center;
-            }
+            .menu-toggle { display: none; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); color: #ffffff; border-radius: 8px; padding: 8px; cursor: pointer; align-items: center; justify-content: center; }
             #chat-header h3 { font-size: 15px; font-weight: 600; color: #ffffff; }
-            
-            .btn-clear { 
-                background: rgba(255, 255, 255, 0.05); 
-                color: var(--text-muted); 
-                border: 1px solid var(--border-color); 
-                padding: 8px 14px; 
-                border-radius: 8px; 
-                font-size: 12px; 
-                font-weight: 500;
-                cursor: pointer; 
-                transition: all 0.2s;
-            }
-            .btn-clear:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
 
-            /* Chat Messages Container */
+            /* Chat Container */
             #chat-container { 
-                flex: 1; 
-                overflow-y: auto; 
-                padding: 20px 20px 120px 20px; 
-                display: flex; 
-                flex-direction: column; 
-                gap: 20px; 
-                max-width: 900px;
-                width: 100%;
-                margin: 0 auto;
+                flex: 1; overflow-y: auto; padding: 20px 20px 120px 20px; 
+                display: flex; flex-direction: column; gap: 20px; 
+                max-width: 900px; width: 100%; margin: 0 auto;
             }
             
-            /* Message Blocks */
+            /* Messages */
             .msg-row { display: flex; width: 100%; animation: fadeIn 0.25s ease-out; }
             .msg-row.user-row { justify-content: flex-end; }
             .msg-row.bot-row { justify-content: flex-start; }
 
-            @keyframes fadeIn {
-                from { opacity: 0; transform: translateY(6px); }
-                to { opacity: 1; transform: translateY(0); }
-            }
+            @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
             .msg-user { 
-                background: var(--user-msg-bg); 
-                color: #ffffff; 
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 16px 16px 4px 16px; 
-                padding: 12px 16px; 
-                font-size: 14px; 
-                line-height: 1.5;
-                max-width: 85%; 
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                background: var(--user-msg-bg); color: #ffffff; 
+                border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px 16px 4px 16px; 
+                padding: 12px 16px; font-size: 14px; line-height: 1.5; max-width: 85%; 
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); word-break: break-word;
             }
             
             .msg-bot { 
-                background: var(--bot-msg-bg); 
-                border: 1px solid var(--border-color); 
-                color: #e2e8f0; 
-                border-radius: 16px 16px 16px 4px; 
-                padding: 14px 18px; 
-                font-size: 14px; 
-                line-height: 1.6; 
-                max-width: 90%; 
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+                background: var(--bot-msg-bg); border: 1px solid var(--border-color); 
+                color: #e2e8f0; border-radius: 16px 16px 16px 4px; 
+                padding: 14px 18px; font-size: 14px; line-height: 1.6; max-width: 90%; 
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2); word-break: break-word;
             }
 
-            /* Оформление Markdown */
             .msg-bot p { margin-bottom: 12px; }
             .msg-bot p:last-child { margin-bottom: 0; }
             .msg-bot strong { color: #ffffff; font-weight: 700; }
-            .msg-bot em { color: #cbd5e1; font-style: italic; }
-            .msg-bot ul, .msg-bot ol { margin: 8px 0 12px 20px; padding-left: 8px; }
-            .msg-bot li { margin-bottom: 4px; }
-            .msg-bot h1, .msg-bot h2, .msg-bot h3, .msg-bot h4 { color: #ffffff; margin: 16px 0 8px 0; font-weight: 700; }
-            .msg-bot h1 { font-size: 18px; }
-            .msg-bot h2 { font-size: 16px; }
-            .msg-bot h3 { font-size: 15px; }
-            .msg-bot blockquote { border-left: 3px solid var(--accent); padding-left: 12px; margin: 8px 0; color: var(--text-muted); }
+            .msg-bot ul, .msg-bot ol { margin: 8px 0 12px 20px; }
             .msg-bot code { background: rgba(255, 255, 255, 0.08); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; color: #f472b6; }
             .msg-bot pre { background: #090a0f; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 10px 0; border: 1px solid var(--border-color); }
-            .msg-bot pre code { background: transparent; padding: 0; color: #e2e8f0; }
             
-            .msg-error { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); color: #fca5a5; }
+            .file-preview-tag { display: inline-flex; align-items: center; gap: 6px; background: rgba(255, 255, 255, 0.1); padding: 4px 8px; border-radius: 6px; font-size: 12px; margin-bottom: 6px; }
 
-            .msg-bot.msg-thinking {
-                padding: 8px 12px;
-                border-radius: 10px;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                width: auto;
-                background: var(--bot-msg-bg);
-            }
-
-            .thinking-indicator { display: flex; align-items: center; gap: 4px; }
-            .thinking-dot { width: 5px; height: 5px; background-color: var(--accent); border-radius: 50%; animation: pulse 1.4s infinite ease-in-out both; }
-            .thinking-dot:nth-child(1) { animation-delay: -0.32s; }
-            .thinking-dot:nth-child(2) { animation-delay: -0.16s; }
-
-            @keyframes pulse {
-                0%, 80%, 100% { transform: scale(0.4); opacity: 0.3; }
-                40% { transform: scale(1); opacity: 1; }
-            }
-
-            /* Fixed Bottom Input Area */
+            /* Input Area */
             #input-wrapper {
-                position: absolute;
-                bottom: 0;
-                left: 0;
-                right: 0;
-                padding: 12px 16px;
-                padding-bottom: calc(12px + env(safe-area-inset-bottom));
+                position: absolute; bottom: 0; left: 0; right: 0; 
+                padding: 12px 16px; padding-bottom: calc(12px + env(safe-area-inset-bottom));
                 background: linear-gradient(180deg, rgba(9, 10, 15, 0) 0%, rgba(9, 10, 15, 0.95) 40%, var(--bg-main) 100%);
                 z-index: 20;
             }
 
             #input-container { 
-                max-width: 900px;
-                margin: 0 auto;
-                background: var(--bg-sidebar); 
-                border: 1px solid var(--border-color); 
-                border-radius: 16px; 
-                padding: 6px 6px 6px 14px; 
-                display: flex; 
-                gap: 8px; 
-                align-items: center; 
+                max-width: 900px; margin: 0 auto; background: var(--bg-sidebar); 
+                border: 1px solid var(--border-color); border-radius: 16px; 
+                padding: 8px 12px; display: flex; flex-direction: column; gap: 8px;
                 box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
             }
-            #input-container:focus-within { 
-                border-color: var(--accent); 
-            }
 
-            #prompt-input { 
-                flex: 1; 
-                background: transparent; 
-                border: none; 
-                color: #ffffff; 
-                font-size: 15px; 
-                outline: none; 
-                min-width: 0;
-            }
+            #file-info-bar { display: none; align-items: center; justify-content: space-between; background: rgba(255, 255, 255, 0.05); padding: 6px 12px; border-radius: 8px; font-size: 12px; color: var(--text-muted); }
+            #file-info-bar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80%; }
+            #file-info-bar button { background: none; border: none; color: #f87171; cursor: pointer; font-size: 14px; }
+
+            .input-row { display: flex; gap: 8px; align-items: center; width: 100%; }
+
+            #file-btn { background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); color: var(--text-muted); padding: 8px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+            #file-btn:hover { color: #ffffff; background: rgba(255, 255, 255, 0.1); }
+
+            #prompt-input { flex: 1; background: transparent; border: none; color: #ffffff; font-size: 15px; outline: none; min-width: 0; }
             #prompt-input::placeholder { color: var(--text-muted); }
             
-            .btn-send { 
-                background: var(--accent); 
-                color: #ffffff; 
-                border: none; 
-                border-radius: 10px; 
-                padding: 10px 16px; 
-                font-size: 13px; 
-                font-weight: 600; 
-                cursor: pointer; 
-                white-space: nowrap;
-                transition: all 0.2s ease; 
-                flex-shrink: 0;
-            }
+            .btn-send { background: var(--accent); color: #ffffff; border: none; border-radius: 10px; padding: 10px 16px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; flex-shrink: 0; }
 
-            /* Mobile Adaptations */
             @media (max-width: 768px) {
-                #sidebar {
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    transform: translateX(-100%);
-                }
-                #sidebar.open {
-                    transform: translateX(0);
-                }
-                .menu-toggle {
-                    display: flex;
-                }
-                #chat-header {
-                    padding: 0 16px;
-                }
-                #chat-container {
-                    padding: 16px 16px 100px 16px;
-                }
+                #sidebar { position: fixed; top: 0; left: 0; transform: translateX(-100%); }
+                #sidebar.open { transform: translateX(0); }
+                .menu-toggle { display: flex; }
+                #chat-header { padding: 0 16px; }
+                #chat-container { padding: 16px 16px 110px 16px; }
             }
         </style>
     </head>
@@ -483,15 +372,10 @@ async def get_chat_ui():
             </button>
 
             <div class="chats-header">
-                <span>История</span>
+                <span>Чаты (<span id="chat-count">1</span>/5)</span>
             </div>
 
-            <div id="chats-list">
-                <div class="chat-item" onclick="toggleSidebar(false)">
-                    <span>Текущая сессия</span>
-                    <span class="close-btn" onclick="event.stopPropagation(); deleteChat(this)">×</span>
-                </div>
-            </div>
+            <div id="chats-list"></div>
 
             <div class="sidebar-footer">
                 <span class="status-dot"></span>
@@ -505,26 +389,53 @@ async def get_chat_ui():
                     <button class="menu-toggle" onclick="toggleSidebar(true)">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
                     </button>
-                    <h3>Диалог</h3>
+                    <h3 id="current-chat-title">Чаты</h3>
                 </div>
-                <button class="btn-clear" onclick="clearMessages()">Очистить</button>
             </div>
 
             <div id="chat-container"></div>
 
             <div id="input-wrapper">
                 <div id="input-container">
-                    <input type="text" id="prompt-input" placeholder="Спросите что-нибудь..." onkeydown="handleKeyPress(event)" />
-                    <button class="btn-send" onclick="sendMessage()">Отправить</button>
+                    <div id="file-info-bar">
+                        <span id="file-name-text">Файл прикреплен</span>
+                        <button onclick="removeSelectedFile()">✕</button>
+                    </div>
+                    <div class="input-row">
+                        <input type="file" id="file-input" style="display: none;" onchange="handleFileSelect(event)" />
+                        <button id="file-btn" onclick="document.getElementById('file-input').click()" title="Прикрепить файл">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+                        </button>
+                        <input type="text" id="prompt-input" placeholder="Спросите или попросите нарисовать..." onkeydown="handleKeyPress(event)" />
+                        <button class="btn-send" onclick="sendMessage()">Отправить</button>
+                    </div>
                 </div>
             </div>
         </div>
 
         <script>
+            let chats = JSON.parse(localStorage.getItem('rubinov_chats') || '[]');
+            let currentChatId = localStorage.getItem('rubinov_active_chat') || null;
+            let selectedFile = null;
+
+            if (chats.length === 0) {
+                const initialChat = { id: Date.now().toString(), name: 'Новый чат 1', messages: [] };
+                chats.push(initialChat);
+                currentChatId = initialChat.id;
+                saveState();
+            } else if (!currentChatId || !chats.find(c => c.id === currentChatId)) {
+                currentChatId = chats[0].id;
+            }
+
+            function saveState() {
+                localStorage.setItem('rubinov_chats', JSON.stringify(chats));
+                localStorage.setItem('rubinov_active_chat', currentChatId);
+                renderChats();
+            }
+
             function toggleSidebar(open) {
                 const sidebar = document.getElementById('sidebar');
                 const overlay = document.getElementById('sidebar-overlay');
-                
                 if (open) {
                     sidebar.classList.add('open');
                     overlay.classList.add('active');
@@ -534,85 +445,173 @@ async def get_chat_ui():
                 }
             }
 
-            function handleKeyPress(e) {
-                if (e.key === 'Enter') {
-                    sendMessage();
+            function renderChats() {
+                const list = document.getElementById('chats-list');
+                list.innerHTML = '';
+                document.getElementById('chat-count').textContent = chats.length;
+
+                chats.forEach(chat => {
+                    const item = document.createElement('div');
+                    item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
+                    item.onclick = () => switchChat(chat.id);
+
+                    item.innerHTML = `
+                        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px;">${escapeHtml(chat.name)}</span>
+                        ${chats.length > 1 ? `<span class="close-btn" onclick="event.stopPropagation(); deleteChat('${chat.id}')">×</span>` : ''}
+                    `;
+                    list.appendChild(item);
+                });
+
+                const active = chats.find(c => c.id === currentChatId);
+                if (active) {
+                    document.getElementById('current-chat-title').textContent = active.name;
+                    renderMessages(active.messages);
                 }
             }
 
-            function clearMessages() {
-                document.getElementById('chat-container').innerHTML = '';
-            }
-
-            function createNewChat() {
-                clearMessages();
+            function switchChat(id) {
+                currentChatId = id;
+                saveState();
                 toggleSidebar(false);
             }
 
-            function deleteChat(element) {
-                element.parentElement.remove();
+            function createNewChat() {
+                if (chats.length >= 5) {
+                    toggleSidebar(false);
+                    return;
+                }
+                const newChat = {
+                    id: Date.now().toString(),
+                    name: `Новый чат ${chats.length + 1}`,
+                    messages: []
+                };
+                chats.push(newChat);
+                currentChatId = newChat.id;
+                saveState();
+                toggleSidebar(false);
+            }
+
+            function deleteChat(id) {
+                chats = chats.filter(c => c.id !== id);
+                if (currentChatId === id) {
+                    currentChatId = chats[0].id;
+                }
+                saveState();
+            }
+
+            function renderMessages(messages) {
+                const chatContainer = document.getElementById('chat-container');
+                chatContainer.innerHTML = '';
+
+                messages.forEach(msg => {
+                    const row = document.createElement('div');
+                    row.className = `msg-row ${msg.role === 'user' ? 'user-row' : 'bot-row'}`;
+                    
+                    const box = document.createElement('div');
+                    box.className = msg.role === 'user' ? 'msg-user' : 'msg-bot';
+
+                    if (msg.role === 'user') {
+                        let content = '';
+                        if (msg.file) {
+                            content += `<div class="file-preview-tag">📁 ${escapeHtml(msg.file)}</div><br>`;
+                        }
+                        content += escapeHtml(msg.text);
+                        box.innerHTML = content;
+                    } else {
+                        box.innerHTML = marked.parse(msg.text);
+                    }
+
+                    row.appendChild(box);
+                    chatContainer.appendChild(row);
+                });
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+
+            function handleFileSelect(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    selectedFile = file;
+                    document.getElementById('file-name-text').textContent = `📁 ${file.name}`;
+                    document.getElementById('file-info-bar').style.display = 'flex';
+                }
+            }
+
+            function removeSelectedFile() {
+                selectedFile = null;
+                document.getElementById('file-input').value = '';
+                document.getElementById('file-info-bar').style.display = 'none';
+            }
+
+            function handleKeyPress(e) {
+                if (e.key === 'Enter') sendMessage();
             }
 
             async function sendMessage() {
                 const input = document.getElementById('prompt-input');
                 const text = input.value.trim();
-                if (!text) return;
-
-                const chat = document.getElementById('chat-container');
-
-                const userRow = document.createElement('div');
-                userRow.className = 'msg-row user-row';
-                userRow.innerHTML = `<div class="msg-user">${escapeHtml(text)}</div>`;
-                chat.appendChild(userRow);
                 
-                input.value = '';
-                chat.scrollTop = chat.scrollHeight;
+                if (!text && !selectedFile) return;
 
+                const activeChat = chats.find(c => c.id === currentChatId);
+                if (!activeChat) return;
+
+                const userMsg = {
+                    role: 'user',
+                    text: text,
+                    file: selectedFile ? selectedFile.name : null
+                };
+
+                activeChat.messages.push(userMsg);
+                if (activeChat.messages.length === 1 && text) {
+                    activeChat.name = text.slice(0, 20) + (text.length > 20 ? '...' : '');
+                }
+                saveState();
+
+                const formData = new FormData();
+                formData.append('prompt', text);
+                if (selectedFile) {
+                    formData.append('file', selectedFile);
+                }
+
+                input.value = '';
+                removeSelectedFile();
+
+                // Показываем индикатор загрузки
+                const chatContainer = document.getElementById('chat-container');
                 const botRow = document.createElement('div');
                 botRow.className = 'msg-row bot-row';
-                const botMsg = document.createElement('div');
-                botMsg.className = 'msg-bot msg-thinking';
-                
-                botMsg.innerHTML = `
-                    <div class="thinking-indicator">
-                        <div class="thinking-dot"></div>
-                        <div class="thinking-dot"></div>
-                        <div class="thinking-dot"></div>
-                    </div>
-                `;
-                
-                botRow.appendChild(botMsg);
-                chat.appendChild(botRow);
-                chat.scrollTop = chat.scrollHeight;
+                botRow.id = 'temp-loader';
+                botRow.innerHTML = `<div class="msg-bot">Думаю...</div>`;
+                chatContainer.appendChild(botRow);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
 
                 try {
                     const res = await fetch('/api/chat', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ prompt: text })
+                        body: formData
                     });
-                    
                     const data = await res.json();
 
-                    botMsg.className = 'msg-bot';
+                    document.getElementById('temp-loader')?.remove();
 
                     if (res.ok) {
-                        botMsg.innerHTML = marked.parse(data.response);
+                        activeChat.messages.push({ role: 'bot', text: data.response });
                     } else {
-                        botMsg.className = 'msg-bot msg-error';
-                        botMsg.textContent = data.detail || 'Произошла ошибка при обработке запроса.';
+                        activeChat.messages.push({ role: 'bot', text: ' Ошибка: ' + (data.detail || 'Не удалось получить ответ.') });
                     }
                 } catch (e) {
-                    botMsg.className = 'msg-bot msg-error';
-                    botMsg.textContent = 'Ошибка подключения к серверу.';
+                    document.getElementById('temp-loader')?.remove();
+                    activeChat.messages.push({ role: 'bot', text: ' Ошибка подключения к серверу.' });
                 }
 
-                chat.scrollTop = chat.scrollHeight;
+                saveState();
             }
 
             function escapeHtml(text) {
-                return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                return (text || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
             }
+
+            renderChats();
         </script>
     </body>
     </html>
