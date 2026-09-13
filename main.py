@@ -162,9 +162,19 @@ async def get_chat_ui():
             .msg-bot { background: #0c0e12; border: 1px solid #1e242d; color: #e2e8f0; border-radius: 12px; padding: 16px 20px; font-size: 14px; max-width: 85%; font-family: monospace; white-space: pre-wrap; line-height: 1.5; }
             .msg-error { background: #2a1215; border-color: #5c1d24; color: #f87171; }
 
+            /* Уменьшенная в 3 раза плашка ожидания */
+            .msg-bot.msg-thinking {
+                padding: 5px 8px;
+                border-radius: 6px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: auto;
+            }
+
             /* Typing / Thinking Animation */
-            .thinking-indicator { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
-            .thinking-dot { width: 8px; height: 8px; background-color: #3b82f6; border-radius: 50%; animation: pulse 1.4s infinite ease-in-out both; }
+            .thinking-indicator { display: flex; align-items: center; gap: 3px; padding: 0; }
+            .thinking-dot { width: 3px; height: 3px; background-color: #3b82f6; border-radius: 50%; animation: pulse 1.4s infinite ease-in-out both; }
             .thinking-dot:nth-child(1) { animation-delay: -0.32s; }
             .thinking-dot:nth-child(2) { animation-delay: -0.16s; }
 
@@ -258,11 +268,11 @@ async def get_chat_ui():
                 input.value = '';
                 chat.scrollTop = chat.scrollHeight;
 
-                // Анимация ожидания
+                // Уменьшенная плашка ожидания
                 const botRow = document.createElement('div');
                 botRow.className = 'msg-row bot-row';
                 const botMsg = document.createElement('div');
-                botMsg.className = 'msg-bot';
+                botMsg.className = 'msg-bot msg-thinking';
                 
                 botMsg.innerHTML = `
                     <div class="thinking-indicator">
@@ -284,6 +294,9 @@ async def get_chat_ui():
                     });
                     
                     const data = await res.json();
+
+                    // Возвращаем стандартный класс для текстового ответа
+                    botMsg.className = 'msg-bot';
 
                     if (res.ok) {
                         botMsg.textContent = data.response;
