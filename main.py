@@ -4,6 +4,8 @@ import json
 import uuid
 import io
 import base64
+import urllib.request
+import urllib.parse
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -13,9 +15,19 @@ from google.genai import types
 
 app = FastAPI()
 
-# Уникальный ID текущей сборки (меняется при каждом перезапуске сервера)
 SERVER_BUILD_ID = str(uuid.uuid4())[:8]
 IMAGE_GEN_ENABLED = True
+
+CURRENT_COMMIT = os.environ.get("RENDER_GIT_COMMIT", "")
+CURRENT_BRANCH = os.environ.get("RENDER_GIT_BRANCH", "")
+CURRENT_REPO_SLUG = os.environ.get("RENDER_GIT_REPO_SLUG", "")
+
+DEPLOY_STATUS_CACHE = {
+    "checked_at": 0.0,
+    "latest_commit": None,
+    "error": None,
+}
+DEPLOY_STATUS_CACHE_TTL = 4.0
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,7 +37,7 @@ app.add_middleware(
 )
 
 client = genai.Client()
-CHAT_MODEL = "gemini-2.5-flash" # Используем актуальную модель
+CHAT_MODEL = "gemini-3.1-flash-lite"  # Переключено на актуальную модель Flash-Lite
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
@@ -33,6 +45,71 @@ class TitleRequest(BaseModel):
 
 class ImageGenRequest(BaseModel):
     prompt: str
+
+def get_latest_github_commit():
+    now = time.time()
+
+    if (
+        DEPLOY_STATUS_CACHE["latest_commit"] is not None
+        and now - DEPLOY_STATUS_CACHE["checked_at"] < DEPLOY_STATUS_CACHE_TTL
+    ):
+        return DEPLOY_STATUS_CACHE["latest_commit"], DEPLOY_STATUS_CACHE["error"]
+
+    if not CURRENT_REPO_SLUG or not CURRENT_BRANCH:
+        DEPLOY_STATUS_CACHE["checked_at"] = now
+        DEPLOY_STATUS_CACHE["latest_commit"] = None
+        DEPLOY_STATUS_CACHE["error"] = "Render Git metadata is unavailable"
+        return None, DEPLOY_STATUS_CACHE["error"]
+
+    branch = urllib.parse.quote(CURRENT_BRANCH, safe="")
+    url = f"https://api.github.com/repos/{CURRENT_REPO_SLUG}/commits/{branch}"
+
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "Rubinov-AI-Deploy-Monitor",
+            },
+        )
+
+        with urllib.request.urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        latest_commit = payload.get("sha")
+
+        DEPLOY_STATUS_CACHE["checked_at"] = now
+        DEPLOY_STATUS_CACHE["latest_commit"] = latest_commit
+        DEPLOY_STATUS_CACHE["error"] = None
+        return latest_commit, None
+
+    except Exception as exc:
+        DEPLOY_STATUS_CACHE["checked_at"] = now
+        DEPLOY_STATUS_CACHE["error"] = str(exc)
+        return DEPLOY_STATUS_CACHE["latest_commit"], str(exc)
+
+
+@app.get("/api/deploy-status")
+async def deploy_status():
+    latest_commit, error = get_latest_github_commit()
+
+    is_building = bool(
+        CURRENT_COMMIT
+        and latest_commit
+        and latest_commit != CURRENT_COMMIT
+    )
+
+    return {
+        "updating": is_building,
+        "current_commit": CURRENT_COMMIT,
+        "latest_commit": latest_commit,
+        "current_branch": CURRENT_BRANCH,
+        "repository": CURRENT_REPO_SLUG,
+        "build_id": SERVER_BUILD_ID,
+        "github_check_ok": latest_commit is not None,
+        "error": error,
+    }
+
 
 @app.get("/api/health")
 async def health_check():
@@ -141,6 +218,64 @@ async def get_chat_ui():
             * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
             body {{ background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }}
             
+            .deploy-overlay {{
+                position: fixed;
+                inset: 0;
+                background: rgba(0,0,0,0.78);
+                backdrop-filter: blur(6px);
+                -webkit-backdrop-filter: blur(6px);
+                display: none;
+                align-items: center;
+                justify-content: center;
+                z-index: 9999;
+                padding: 20px;
+            }}
+
+            .deploy-overlay.active {{ display: flex; }}
+
+            .deploy-card {{
+                width: min(420px, 100%);
+                background: #0b0b0b;
+                border: 1px solid #2a2a2a;
+                border-radius: 20px;
+                padding: 28px;
+                text-align: center;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+            }}
+
+            .deploy-spinner {{
+                width: 34px;
+                height: 34px;
+                margin: 0 auto 16px;
+                border: 3px solid #2b2b2b;
+                border-top-color: #ffffff;
+                border-radius: 50%;
+                animation: deploySpin 0.9s linear infinite;
+            }}
+
+            @keyframes deploySpin {{
+                to {{ transform: rotate(360deg); }}
+            }}
+
+            .deploy-title {{
+                color: #f1f1f1;
+                font-size: 1rem;
+                font-weight: 700;
+                margin-bottom: 8px;
+            }}
+
+            .deploy-text {{
+                color: #777;
+                font-size: 0.83rem;
+                line-height: 1.5;
+            }}
+
+            .deploy-hint {{
+                color: #4f4f4f;
+                font-size: 0.72rem;
+                margin-top: 12px;
+            }}
+
             .sidebar {{ width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; transition: transform 0.3s ease; z-index: 100; }}
             .logo-area {{ margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; padding: 0 8px; }}
             .logo-title {{ font-size: 1.1rem; font-weight: bold; color: #cccccc; }}
@@ -233,6 +368,19 @@ async def get_chat_ui():
         </style>
     </head>
     <body>
+        <div id="deployOverlay" class="deploy-overlay" aria-live="polite">
+            <div class="deploy-card">
+                <div class="deploy-spinner"></div>
+                <div class="deploy-title">Сайт обновляется</div>
+                <div class="deploy-text" id="deployOverlayText">
+                    Новая версия уже собирается на Render. Пожалуйста, не закрывайте страницу.
+                </div>
+                <div class="deploy-hint">
+                    После завершения сайт обновится автоматически.
+                </div>
+            </div>
+        </div>
+
         <div id="sidebar" class="sidebar">
             <div class="logo-area">
                 <div>
@@ -261,7 +409,7 @@ async def get_chat_ui():
                     <button class="menu-btn" onclick="toggleSidebar()">☰</button>
                     <div class="top-title-wrapper">
                         <div class="top-title" id="currentChatTitle">Новый диалог</div>
-                        <div class="model-badge">⚡ gemini-2.5-flash</div>
+                        <div class="model-badge">⚡ gemini-3.1-flash-lite</div>
                     </div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px;">
@@ -284,4 +432,371 @@ async def get_chat_ui():
                         <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключитесь в режим создания картинок.</div>
                     </div>
                     <div class="chips-grid">
-                        <div class="chip" onclick="sendPreset
+                        <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
+                        <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
+                        <div class="chip" onclick="sendPreset('Составь план продуктивного дня')">📋 План дня</div>
+                        <div class="chip" onclick="sendPreset('Киберпанк город под дождем, неоновые вывески')">🎨 Нарисовать киберпанк</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-container">
+                <div class="input-box">
+                    <div id="filePreviewArea"></div>
+                    <div class="input-row">
+                        <button class="attach-btn" title="Прикрепить файл" onclick="document.getElementById('fileInput').click()">📎</button>
+                        <input type="file" id="fileInput" style="display:none" onchange="handleFileSelect(event)">
+                        
+                        <textarea id="userInput" rows="1" placeholder="Введите сообщение..." oninput="autoResize(this)" onkeydown="handleKeyDown(event)"></textarea>
+                        
+                        <button id="sendBtn" class="send-btn" onclick="sendMessage()">Отправить</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            const CURRENT_BUILD_ID = "{SERVER_BUILD_ID}";
+            const CURRENT_DEPLOY_COMMIT = "{CURRENT_COMMIT}";
+
+            let deployUpdatingShown = false;
+            let deployReloadScheduled = false;
+
+            function setDeployOverlay(active, text = null) {{
+                const overlay = document.getElementById('deployOverlay');
+                if (!overlay) return;
+
+                overlay.classList.toggle('active', active);
+
+                if (text) {{
+                    document.getElementById('deployOverlayText').innerText = text;
+                }}
+            }}
+
+            function hardReloadAfterDeploy() {{
+                if (deployReloadScheduled) return;
+                deployReloadScheduled = true;
+
+                const url = new URL(window.location.href);
+                url.searchParams.set('_updated', Date.now().toString());
+
+                window.location.replace(url.toString());
+            }}
+
+            async function checkDeployStatus() {{
+                try {{
+                    const res = await fetch('/api/deploy-status?t=' + Date.now(), {{
+                        cache: 'no-store',
+                        headers: {{ 'Cache-Control': 'no-cache' }}
+                    }});
+
+                    if (!res.ok) return;
+
+                    const data = await res.json();
+
+                    if (data.updating) {{
+                        if (!deployUpdatingShown) {{
+                            deployUpdatingShown = true;
+                            setDeployOverlay(
+                                true,
+                                'Новая версия уже отправлена в GitHub и сейчас собирается на Render.'
+                            );
+                        }}
+                        return;
+                    }}
+
+                    const newVersionStarted =
+                        CURRENT_DEPLOY_COMMIT &&
+                        data.current_commit &&
+                        data.current_commit !== CURRENT_DEPLOY_COMMIT;
+
+                    const backendRestarted =
+                        data.build_id &&
+                        data.build_id !== CURRENT_BUILD_ID;
+
+                    if (newVersionStarted || backendRestarted) {{
+                        setDeployOverlay(
+                            true,
+                            'Сборка завершена. Перезапускаю сайт и загружаю новую версию...'
+                        );
+
+                        setTimeout(hardReloadAfterDeploy, 350);
+                    }}
+                }} catch (e) {{}}
+            }}
+
+            checkDeployStatus();
+            setInterval(checkDeployStatus, 4000);
+
+            let chats = JSON.parse(localStorage.getItem('rubinov_chats') || '[]');
+            let currentChatId = localStorage.getItem('rubinov_current_id') || null;
+            let selectedFile = null;
+            let currentMode = 'chat';
+
+            function setMode(mode) {{
+                currentMode = mode;
+                document.getElementById('modeChat').classList.toggle('active', mode === 'chat');
+                document.getElementById('modeImage').classList.toggle('active', mode === 'image');
+                const textarea = document.getElementById('userInput');
+                textarea.placeholder = mode === 'image' ? 'Опишите картинку для генерации...' : 'Введите сообщение...';
+            }}
+
+            window.addEventListener('DOMContentLoaded', () => {{
+                renderChatsList();
+                if (currentChatId) {{
+                    loadChat(currentChatId);
+                }}
+            }});
+
+            function toggleSidebar() {{
+                document.getElementById('sidebar').classList.toggle('open');
+            }}
+
+            function autoResize(textarea) {{
+                textarea.style.height = 'auto';
+                textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+            }}
+
+            function handleKeyDown(e) {{
+                if (e.key === 'Enter' && !e.shiftKey) {{
+                    e.preventDefault();
+                    sendMessage();
+                }}
+            }}
+
+            function handleFileSelect(e) {{
+                const file = e.target.files[0];
+                if (!file) return;
+                selectedFile = file;
+                const previewArea = document.getElementById('filePreviewArea');
+                previewArea.innerHTML = `
+                    <div class="file-preview-pill">
+                        <span>📎 ${{file.name}}</span>
+                        <button onclick="removeFile()">×</button>
+                    </div>
+                `;
+            }}
+
+            function removeFile() {{
+                selectedFile = null;
+                document.getElementById('fileInput').value = '';
+                document.getElementById('filePreviewArea').innerHTML = '';
+            }}
+
+            function sendPreset(text) {{
+                document.getElementById('userInput').value = text;
+                if (text.includes('Нарисовать')) {{
+                    setMode('image');
+                }}
+                sendMessage();
+            }}
+
+            function startNewChat() {{
+                currentChatId = null;
+                localStorage.removeItem('rubinov_current_id');
+                document.getElementById('currentChatTitle').innerText = 'Новый диалог';
+                document.getElementById('chatMessages').innerHTML = `
+                    <div class="welcome-container" id="welcomeContainer">
+                        <div class="welcome-card">
+                            <div class="welcome-title">Чем я могу помочь сегодня?</div>
+                            <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключитесь в режим создания картинок.</div>
+                        </div>
+                        <div class="chips-grid">
+                            <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
+                            <div class="chip" onclick="sendPreset('Объясни квантовые вычисления простыми словами')">🌌 Квантовая физика</div>
+                            <div class="chip" onclick="sendPreset('Составь план продуктивного дня')">📋 План дня</div>
+                            <div class="chip" onclick="sendPreset('Киберпанк город под дождем, неоновые вывески')">🎨 Нарисовать киберпанк</div>
+                        </div>
+                    </div>
+                `;
+                renderChatsList();
+                if (window.innerWidth <= 768) toggleSidebar();
+            }}
+
+            function clearCurrentChat() {{
+                startNewChat();
+            }}
+
+            function renderChatsList() {{
+                const list = document.getElementById('chatsList');
+                list.innerHTML = '';
+                chats.forEach(chat => {{
+                    const div = document.createElement('div');
+                    div.className = `chat-item ${{chat.id === currentChatId ? 'active' : ''}}`;
+                    div.innerHTML = `
+                        <span class="chat-title-text" onclick="loadChat('${{chat.id}}')">${{chat.title}}</span>
+                        <button class="delete-chat-btn" onclick="deleteChat(event, '${{chat.id}}')">×</button>
+                    `;
+                    list.appendChild(div);
+                });
+            }}
+
+            function deleteChat(e, id) {{
+                e.stopPropagation();
+                chats = chats.filter(c => c.id !== id);
+                localStorage.setItem('rubinov_chats', JSON.stringify(chats));
+                if (currentChatId === id) {{
+                    startNewChat();
+                }} else {{
+                    renderChatsList();
+                }}
+            }}
+
+            function loadChat(id) {{
+                const chat = chats.find(c => c.id === id);
+                if (!chat) return;
+                currentChatId = id;
+                localStorage.setItem('rubinov_current_id', id);
+                document.getElementById('currentChatTitle').innerText = chat.title;
+                
+                const container = document.getElementById('chatMessages');
+                container.innerHTML = '';
+                chat.messages.forEach(m => {{
+                    const msgDiv = document.createElement('div');
+                    msgDiv.className = `message ${{m.role}}`;
+                    msgDiv.innerHTML = m.content;
+                    container.appendChild(msgDiv);
+                }});
+                container.scrollTop = container.scrollHeight;
+                renderChatsList();
+                if (window.innerWidth <= 768) toggleSidebar();
+            }}
+
+            async function sendMessage() {{
+                const input = document.getElementById('userInput');
+                const text = input.value.trim();
+                if (!text && !selectedFile) return;
+
+                const welcome = document.getElementById('welcomeContainer');
+                if (welcome) welcome.remove();
+
+                const container = document.getElementById('chatMessages');
+                
+                const userMsgDiv = document.createElement('div');
+                userMsgDiv.className = 'message user';
+                let displayContent = text;
+                if (selectedFile) {{
+                    displayContent = `[Файл: ${{selectedFile.name}}]<br>` + displayContent;
+                }}
+                userMsgDiv.innerHTML = displayContent;
+                container.appendChild(userMsgDiv);
+
+                input.value = '';
+                input.style.height = 'auto';
+                const fileToSend = selectedFile;
+                removeFile();
+
+                document.getElementById('aiStatusBadge').classList.add('active');
+                document.getElementById('sendBtn').disabled = true;
+                container.scrollTop = container.scrollHeight;
+
+                try {{
+                    let responseHtml = '';
+
+                    if (currentMode === 'image') {{
+                        const imgRes = await fetch('/api/generate-image', {{
+                            method: 'POST',
+                            headers: {{'Content-Type': 'application/json'}},
+                            body: JSON.stringify({{ prompt: text }})
+                        }});
+                        const imgData = await imgRes.json();
+                        if (!imgRes.ok) throw new Error(imgData.detail || 'Ошибка генерации картинки');
+                        responseHtml = `Сгенерированное изображение по запросу: "${{text}}"<br><img src="${{imgData.image_url}}" alt="Generated Image">`;
+                    }} else {{
+                        let currentHistory = [];
+                        if (currentChatId) {{
+                            const activeChat = chats.find(c => c.id === currentChatId);
+                            if (activeChat) {{
+                                currentHistory = activeChat.messages.map(m => ({{
+                                    role: m.role,
+                                    content: m.content
+                                }}));
+                            }}
+                        }}
+
+                        const formData = new FormData();
+                        formData.append('message', text);
+                        formData.append('history', JSON.stringify(currentHistory));
+                        if (fileToSend) {{
+                            formData.append('file', fileToSend);
+                        }}
+
+                        const res = await fetch('/api/chat', {{
+                            method: 'POST',
+                            body: formData
+                        }});
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || 'Ошибка сервера');
+                        responseHtml = data.response;
+                    }}
+
+                    const aiMsgDiv = document.createElement('div');
+                    aiMsgDiv.className = 'message ai';
+                    aiMsgDiv.innerHTML = responseHtml;
+                    container.appendChild(aiMsgDiv);
+
+                    if (!currentChatId) {{
+                        currentChatId = 'chat_' + Date.now();
+                        localStorage.setItem('rubinov_current_id', currentChatId);
+                        
+                        let chatTitle = text.slice(0, 25) + '...';
+                        if (currentMode === 'chat') {{
+                            try {{
+                                const titleRes = await fetch('/api/title', {{
+                                    method: 'POST',
+                                    headers: {{'Content-Type': 'application/json'}},
+                                    body: JSON.stringify({{ message: text }})
+                                }});
+                                const titleData = await titleRes.json();
+                                if (titleData.title) chatTitle = titleData.title;
+                            }} catch(err) {{}}
+                        }} else {{
+                            chatTitle = '🎨 ' + text.slice(0, 20) + '...';
+                        }}
+
+                        document.getElementById('currentChatTitle').innerText = chatTitle;
+                        
+                        chats.unshift({{
+                            id: currentChatId,
+                            title: chatTitle,
+                            messages: [
+                                {{ role: 'user', content: displayContent }},
+                                {{ role: 'ai', content: responseHtml }}
+                            ]
+                        }});
+                    }} else {{
+                        const chat = chats.find(c => c.id === currentChatId);
+                        if (chat) {{
+                            chat.messages.push({{ role: 'user', content: displayContent }});
+                            chat.messages.push({{ role: 'ai', content: responseHtml }});
+                        }}
+                    }}
+                    localStorage.setItem('rubinov_chats', JSON.stringify(chats));
+                    renderChatsList();
+
+                }} catch (err) {{
+                    const errDiv = document.createElement('div');
+                    errDiv.className = 'message ai';
+                    errDiv.style.color = '#ef4444';
+                    errDiv.innerText = 'Ошибка: ' + err.message;
+                    container.appendChild(errDiv);
+                }} finally {{
+                    document.getElementById('aiStatusBadge').classList.remove('active');
+                    document.getElementById('sendBtn').disabled = false;
+                    container.scrollTop = container.scrollHeight;
+                }}
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content, headers={
+        "Cache-Control": "no-cache, no-store, max-age=0, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+    })
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
