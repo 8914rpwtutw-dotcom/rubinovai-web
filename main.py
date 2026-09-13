@@ -1,4 +1,5 @@
 import os
+import time
 import uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,11 +45,12 @@ def get_gemini_response(prompt: str) -> str:
 
     num_keys = len(api_keys)
     num_models = len(MODELS)
-    total_attempts = num_keys * num_models
+    # Позволяем пройти по всем комбинациям 2 раза, на случай временной перегрузки
+    total_attempts = num_keys * num_models * 2
 
     last_error_msg = ""
 
-    for _ in range(total_attempts):
+    for attempt in range(total_attempts):
         active_key = api_keys[current_key_idx % num_keys]
         active_model = MODELS[current_model_idx % num_models]
 
@@ -62,14 +64,21 @@ def get_gemini_response(prompt: str) -> str:
 
         except APIError as e:
             last_error_msg = str(e)
-            if e.code == 404 or "not found" in str(e).lower() or "no longer available" in str(e).lower():
-                current_model_idx = (current_model_idx + 1) % num_models
-                continue
-            elif e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
+            
+            # Обработка 503 (High Demand / Unavailable) и 429 (Rate Limit / Quota)
+            if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e) or "high demand" in str(e).lower():
                 current_model_idx += 1
                 if current_model_idx >= num_models:
                     current_model_idx = 0
                     current_key_idx = (current_key_idx + 1) % num_keys
+                
+                # Делаем паузу полсекунды перед следующей попыткой
+                time.sleep(0.5)
+                continue
+                
+            # Обработка 404 (Модель не найдена)
+            elif e.code == 404 or "not found" in str(e).lower() or "no longer available" in str(e).lower():
+                current_model_idx = (current_model_idx + 1) % num_models
                 continue
             else:
                 break
@@ -79,7 +88,7 @@ def get_gemini_response(prompt: str) -> str:
 
     raise HTTPException(
         status_code=500,
-        detail=f"Ошибка генерации ответа. Детали: {last_error_msg}"
+        detail="Сервис ИИ перегружен в данный момент. Пожалуйста, повторите попытку через несколько секунд."
     )
 
 class ChatPayload(BaseModel):
