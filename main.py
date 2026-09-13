@@ -64,7 +64,6 @@ def generate_image_response(prompt: str) -> Optional[str]:
 def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_type: Optional[str] = None) -> str:
     global current_key_idx, current_model_idx
     
-    # Проверка запроса на генерацию изображения
     lowered = prompt.lower()
     if any(kw in lowered for kw in ["нарисуй", "сгенерируй картинку", "создай картинку", "нарисуй изображение", "draw", "generate image"]):
         img_html = generate_image_response(prompt)
@@ -169,7 +168,7 @@ async def get_chat_ui():
                 --text-muted: #94a3b8;
                 --user-msg-bg: #1e2235;
                 --bot-msg-bg: #11131c;
-                --scrollbar-thumb: #050608; /* Аккуратный овал более тёмный, чем фон */
+                --scrollbar-thumb: #050608;
             }
 
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
@@ -284,10 +283,48 @@ async def get_chat_ui():
                 flex: 1; overflow-y: auto; padding: 20px 20px 120px 20px; 
                 display: flex; flex-direction: column; gap: 20px; 
                 max-width: 900px; width: 100%; margin: 0 auto;
+                position: relative;
+            }
+
+            /* Welcome Screen */
+            .welcome-screen {
+                position: absolute;
+                top: 40%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                text-align: center;
+                user-select: none;
+                pointer-events: none;
+                width: 90%;
+                max-width: 450px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 12px;
+            }
+            .welcome-avatar {
+                width: 56px; height: 56px;
+                background: linear-gradient(135deg, #6366f1, #a855f7);
+                border-radius: 16px;
+                display: flex; align-items: center; justify-content: center;
+                font-weight: 700; font-size: 26px; color: #fff;
+                box-shadow: 0 8px 24px rgba(99, 102, 241, 0.35);
+                margin-bottom: 4px;
+            }
+            .welcome-screen h1 {
+                font-size: 22px;
+                font-weight: 700;
+                color: #ffffff;
+                letter-spacing: -0.3px;
+            }
+            .welcome-screen p {
+                font-size: 14px;
+                color: var(--text-muted);
+                line-height: 1.5;
             }
             
             /* Messages */
-            .msg-row { display: flex; width: 100%; animation: fadeIn 0.25s ease-out; }
+            .msg-row { display: flex; width: 100%; animation: fadeIn 0.25s ease-out; z-index: 2; }
             .msg-row.user-row { justify-content: flex-end; }
             .msg-row.bot-row { justify-content: flex-start; }
 
@@ -503,6 +540,18 @@ async def get_chat_ui():
                 const chatContainer = document.getElementById('chat-container');
                 chatContainer.innerHTML = '';
 
+                if (messages.length === 0) {
+                    const welcome = document.createElement('div');
+                    welcome.className = 'welcome-screen';
+                    welcome.innerHTML = `
+                        <div class="welcome-avatar">R</div>
+                        <h1>Привет! Я Rubinov AI</h1>
+                        <p>Чем я могу помочь тебе сегодня? Могу ответить на вопросы, обработать файлы или нарисовать картинку.</p>
+                    `;
+                    chatContainer.appendChild(welcome);
+                    return;
+                }
+
                 messages.forEach(msg => {
                     const row = document.createElement('div');
                     row.className = `msg-row ${msg.role === 'user' ? 'user-row' : 'bot-row'}`;
@@ -565,7 +614,9 @@ async def get_chat_ui():
                 if (activeChat.messages.length === 1 && text) {
                     activeChat.name = text.slice(0, 20) + (text.length > 20 ? '...' : '');
                 }
-                saveState();
+                
+                // Перерисовываем интерфейс сразу для отображения сообщения и скрытия приветствия
+                renderMessages(activeChat.messages);
 
                 const formData = new FormData();
                 formData.append('prompt', text);
@@ -597,11 +648,11 @@ async def get_chat_ui():
                     if (res.ok) {
                         activeChat.messages.push({ role: 'bot', text: data.response });
                     } else {
-                        activeChat.messages.push({ role: 'bot', text: ' Ошибка: ' + (data.detail || 'Не удалось получить ответ.') });
+                        activeChat.messages.push({ role: 'bot', text: 'Ошибка: ' + (data.detail || 'Не удалось получить ответ.') });
                     }
                 } catch (e) {
                     document.getElementById('temp-loader')?.remove();
-                    activeChat.messages.push({ role: 'bot', text: ' Ошибка подключения к серверу.' });
+                    activeChat.messages.push({ role: 'bot', text: 'Ошибка подключения к серверу.' });
                 }
 
                 saveState();
