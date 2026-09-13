@@ -138,32 +138,32 @@ async def get_chat_ui():
             body { background: #050505; color: #c0c0c0; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
             .sidebar { width: 300px; background: #0a0a0a; display: flex; flex-direction: column; border-right: 1px solid #1f1f1f; padding: 16px; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 100; }
-            .logo-area { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; }
+            .logo-area { margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; }
             .logo-title { font-size: 1.15rem; font-weight: 700; color: #e0e0e0; letter-spacing: 0.5px; }
             .logo-subtitle { font-size: 0.7rem; color: #707070; font-weight: 600; margin-top: 2px; letter-spacing: 1px; }
             .close-sidebar-btn { display: none; background: transparent; border: none; color: #aaa; font-size: 1.4rem; cursor: pointer; padding: 4px; }
 
             .new-chat-btn { 
-                background: #141414; color: #e0e0e0; border: 1px solid #2a2a2a; padding: 12px 16px; 
-                border-radius: 14px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 20px; 
-                display: flex; align-items: center; gap: 10px; transition: all 0.2s; font-size: 0.9rem;
+                background: #141414; color: #e0e0e0; border: 1px solid #2a2a2a; padding: 8px 12px; 
+                border-radius: 10px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 14px; 
+                display: flex; align-items: center; gap: 8px; transition: all 0.2s; font-size: 0.83rem;
             }
             .new-chat-btn:hover { background: #1c1c1c; border-color: #404040; color: #fff; }
             
-            .chats-section-title { font-size: 0.7rem; text-transform: uppercase; color: #666; margin-bottom: 8px; font-weight: 700; padding: 0 8px; letter-spacing: 0.8px; }
-            .chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; padding-right: 4px; }
+            .chats-section-title { font-size: 0.7rem; text-transform: uppercase; color: #666; margin-bottom: 6px; font-weight: 700; padding: 0 8px; letter-spacing: 0.8px; }
+            .chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; padding-right: 4px; }
             .chats-list::-webkit-scrollbar { width: 4px; }
             .chats-list::-webkit-scrollbar-thumb { background: #222; border-radius: 4px; }
             
             .chat-item { 
-                display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; 
-                border-radius: 12px; cursor: pointer; background: transparent; color: #999; font-size: 0.9rem; 
+                display: flex; align-items: center; justify-content: space-between; padding: 7px 10px; 
+                border-radius: 8px; cursor: pointer; background: transparent; color: #999; font-size: 0.83rem; 
                 border: 1px solid transparent; transition: all 0.2s;
             }
             .chat-item:hover { background: #121212; color: #ccc; }
             .chat-item.active { background: #1a1a1a; color: #f0f0f0; font-weight: 500; border-color: #2e2e2e; }
             .chat-title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-            .delete-chat-btn { background: transparent; border: none; color: #666; font-size: 1.1rem; cursor: pointer; padding: 4px 8px; border-radius: 6px; opacity: 0; transition: opacity 0.2s; }
+            .delete-chat-btn { background: transparent; border: none; color: #666; font-size: 1rem; cursor: pointer; padding: 2px 6px; border-radius: 4px; opacity: 0; transition: opacity 0.2s; }
             .chat-item:hover .delete-chat-btn { opacity: 1; }
             .delete-chat-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
 
@@ -258,7 +258,7 @@ async def get_chat_ui():
             </div>
             
             <button class="new-chat-btn" onclick="startNewChat()">
-                <span style="font-size: 1.1rem; line-height: 1;">+</span> Новый чат
+                <span style="font-size: 1rem; line-height: 1;">+</span> Новый чат
             </button>
             
             <div class="chats-section-title">История диалогов</div>
@@ -417,7 +417,7 @@ async def get_chat_ui():
                 const list = document.getElementById('chatsList');
                 list.innerHTML = '';
                 if (chats.length === 0) {
-                    list.innerHTML = '<div style="font-size: 0.8rem; color: #555; padding: 4px 8px;">Нет сохраненных чатов</div>';
+                    list.innerHTML = '<div style="font-size: 0.78rem; color: #555; padding: 4px 8px;">Нет сохраненных чатов</div>';
                     return;
                 }
                 chats.forEach(chat => {
