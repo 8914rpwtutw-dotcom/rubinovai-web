@@ -104,7 +104,7 @@ async def get_chat_ui():
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
         <title>Rubinov AI</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -125,16 +125,17 @@ async def get_chat_ui():
             }
 
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
-            body { background: var(--bg-main); color: var(--text-main); height: 100vh; display: flex; overflow: hidden; position: relative; }
+            html, body { height: 100%; height: 100dvh; overflow: hidden; background: var(--bg-main); color: var(--text-main); }
+            body { display: flex; position: relative; }
 
-            /* Backdrop Overlay for Mobile */
+            /* Overlay for Mobile Sidebar */
             #sidebar-overlay {
                 display: none;
                 position: fixed;
                 top: 0;
                 left: 0;
                 width: 100vw;
-                height: 100vh;
+                height: 100dvh;
                 background: rgba(0, 0, 0, 0.6);
                 backdrop-filter: blur(4px);
                 z-index: 40;
@@ -156,6 +157,7 @@ async def get_chat_ui():
                 padding: 20px 16px; 
                 z-index: 50;
                 transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                height: 100dvh;
             }
             .brand { 
                 display: flex; 
@@ -223,11 +225,20 @@ async def get_chat_ui():
             .sidebar-footer { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border-color); }
             .status-dot { width: 8px; height: 8px; background: #10b981; border-radius: 50%; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
 
-            /* Main Chat Area */
-            #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100vh; }
+            /* Main Area */
+            #main { 
+                flex: 1; 
+                display: flex; 
+                flex-direction: column; 
+                background: var(--bg-main); 
+                position: relative; 
+                height: 100dvh; 
+                overflow: hidden;
+            }
             
             #chat-header { 
                 height: 60px; 
+                min-height: 60px;
                 border-bottom: 1px solid var(--border-color); 
                 display: flex; 
                 align-items: center; 
@@ -235,6 +246,7 @@ async def get_chat_ui():
                 padding: 0 20px; 
                 background: rgba(15, 17, 23, 0.85); 
                 backdrop-filter: blur(12px);
+                z-index: 10;
             }
             .header-left { display: flex; align-items: center; gap: 12px; }
             .menu-toggle {
@@ -263,10 +275,11 @@ async def get_chat_ui():
             }
             .btn-clear:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
 
+            /* Chat Messages Container */
             #chat-container { 
                 flex: 1; 
                 overflow-y: auto; 
-                padding: 20px; 
+                padding: 20px 20px 120px 20px; 
                 display: flex; 
                 flex-direction: column; 
                 gap: 20px; 
@@ -332,15 +345,21 @@ async def get_chat_ui():
                 40% { transform: scale(1); opacity: 1; }
             }
 
-            /* Input Area */
+            /* Fixed Bottom Input Area */
             #input-wrapper {
-                padding: 12px 16px 20px 16px;
-                max-width: 900px;
-                width: 100%;
-                margin: 0 auto;
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                padding: 12px 16px;
+                padding-bottom: calc(12px + env(safe-area-inset-bottom));
+                background: linear-gradient(180deg, rgba(9, 10, 15, 0) 0%, rgba(9, 10, 15, 0.95) 40%, var(--bg-main) 100%);
+                z-index: 20;
             }
 
             #input-container { 
+                max-width: 900px;
+                margin: 0 auto;
                 background: var(--bg-sidebar); 
                 border: 1px solid var(--border-color); 
                 border-radius: 16px; 
@@ -348,7 +367,7 @@ async def get_chat_ui():
                 display: flex; 
                 gap: 8px; 
                 align-items: center; 
-                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
             }
             #input-container:focus-within { 
                 border-color: var(--accent); 
@@ -359,8 +378,9 @@ async def get_chat_ui():
                 background: transparent; 
                 border: none; 
                 color: #ffffff; 
-                font-size: 14px; 
+                font-size: 15px; 
                 outline: none; 
+                min-width: 0;
             }
             #prompt-input::placeholder { color: var(--text-muted); }
             
@@ -373,16 +393,17 @@ async def get_chat_ui():
                 font-size: 13px; 
                 font-weight: 600; 
                 cursor: pointer; 
+                white-space: nowrap;
                 transition: all 0.2s ease; 
+                flex-shrink: 0;
             }
 
-            /* Мобильная адаптация (до 768px) */
+            /* Mobile Adaptations */
             @media (max-width: 768px) {
                 #sidebar {
                     position: fixed;
                     top: 0;
                     left: 0;
-                    height: 100vh;
                     transform: translateX(-100%);
                 }
                 #sidebar.open {
@@ -395,7 +416,7 @@ async def get_chat_ui():
                     padding: 0 16px;
                 }
                 #chat-container {
-                    padding: 16px;
+                    padding: 16px 16px 100px 16px;
                 }
             }
         </style>
