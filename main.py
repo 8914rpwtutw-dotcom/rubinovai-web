@@ -31,7 +31,7 @@ def get_chat_ui():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Rubinov AI</title>
+        <title>Rubinov AI — Beta</title>
         <style>
             body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #131314; color: #e3e3e3; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }}
             .header {{ padding: 10px 20px; background: #1e1f20; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333537; }}
@@ -46,7 +46,6 @@ def get_chat_ui():
             .mode-select {{ background: #2d2e30; color: white; border: none; padding: 5px 10px; border-radius: 8px; outline: none; cursor: pointer; }}
             img {{ max-width: 100%; border-radius: 8px; margin-top: 10px; }}
 
-            /* Стили для всплывающей плашки бета-теста на 5 секунд */
             #beta-popup {{
                 position: fixed;
                 top: 20px;
@@ -92,7 +91,6 @@ def get_chat_ui():
         </div>
 
         <script>
-            // Автоматически скрываем плашку через 5 секунд в DOM
             setTimeout(() => {{
                 const popup = document.getElementById('beta-popup');
                 if (popup) popup.remove();
@@ -140,6 +138,7 @@ async def chat_endpoint(message: str = Form(...)):
     delay = 2
     for attempt in range(retries):
         try:
+            # Используем sбалансированную модель gemini-2.5-flash для стабильной работы
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=message,
@@ -151,7 +150,7 @@ async def chat_endpoint(message: str = Form(...)):
                     time.sleep(delay * (attempt + 1))
                     continue
             return f"Ошибка ИИ: {str(e)}"
-    return "Сервис перегружен."
+    return "Сервис перегружен. Повторите попытку через пару секунд."
 
 @app.post("/generate-image")
 async def generate_image_endpoint(prompt: str = Form(...)):
