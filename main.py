@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from google import genai
 from google.genai import types
-from google.genai.errors import APIError
 
 app = FastAPI()
 
@@ -21,7 +20,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = genai.Client()
+def get_genai_client():
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY не найден в Environment Variables")
+    return genai.Client(api_key=api_key)
 
 @app.get("/", response_class=HTMLResponse)
 def get_chat_ui():
@@ -104,7 +107,7 @@ def get_chat_ui():
             async function sendMessage() {{
                 const input = document.getElementById('userInput');
                 const chatBox = document.getElementById('chatBox');
-                const mode = document.getElementById('modeSelect',).value;
+                const mode = document.getElementById('modeSelect').value;
                 const text = input.value.trim();
                 if (!text) return;
 
@@ -119,19 +122,19 @@ def get_chat_ui():
                 const endpoint = mode === 'chat' ? '/chat' : '/generate-image';
                 const bodyKey = mode === 'chat' ? 'message' : 'prompt';
 
-                try {
-                    const response = await fetch(endpoint, {
+                try {{
+                    const response = await fetch(endpoint, {{
                         method: 'POST',
-                        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
                         body: bodyKey + '=' + encodeURIComponent(text)
-                    });
+                    }});
                     const data = await response.text();
                     document.getElementById(loadId).outerHTML = `<div class="message bot">${{data}}</div>`;
-                } catch (e) {
+                }} catch (e) {{
                     document.getElementById(loadId).outerHTML = `<div class="message bot" style="color:red;">Ошибка соединения</div>`;
-                }
+                }}
                 chatBox.scrollTop = chatBox.scrollHeight;
-            }
+            }}
         </script>
     </body>
     </html>
@@ -143,6 +146,7 @@ async def chat_endpoint(message: str = Form(...)):
     delay = 2
     for attempt in range(retries):
         try:
+            client = get_genai_client()
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=message,
@@ -159,6 +163,7 @@ async def chat_endpoint(message: str = Form(...)):
 @app.post("/generate-image")
 async def generate_image_endpoint(prompt: str = Form(...)):
     try:
+        client = get_genai_client()
         result = client.models.generate_images(
             model='imagen-3.0-generate-002',
             prompt=prompt,
