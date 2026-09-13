@@ -1,20 +1,15 @@
 import os
-import time
-import json
 import uuid
-import io
-import base64
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted, GoogleAPIError
+from google import genai
+from google.genai.errors import APIError
 
 app = FastAPI()
 
 SERVER_BUILD_ID = str(uuid.uuid4())[:8]
-IMAGE_GEN_ENABLED = True
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,19 +19,20 @@ app.add_middleware(
 )
 
 # ------------------------------------------------------------------
-#  БЛОК РОТАЦИИ КЛЮЧЕЙ И МОДЕЛЕЙ (Multi-key & Fallback Strategy)
+#  БЛОК РОТАЦИИ КЛЮЧЕЙ И МОДЕЛЕЙ (google-genai SDK)
 # ------------------------------------------------------------------
 
-# Динамически считываем все ключи (GEMINI_KEY_1, GEMINI_KEY_2 и т.д.)
+# Собираем ключи из переменных окружения
 API_KEYS = [
     os.getenv("GEMINI_KEY_1"),
     os.getenv("GEMINI_KEY_2"),
     os.getenv("GEMINI_KEY_3"),
+    os.getenv("GEMINI_API_KEY")  # на случай дефолтного имени
 ]
-# Оставляем только те ключи, которые заданы в настройках хостинга
+# Оставляем только заполненные
 API_KEYS = [k for k in API_KEYS if k]
 
-# Модели для отката (от основной к более легким)
+# Приоритет моделей
 MODELS_PRIORITY = [
     "gemini-2.0-flash",
     "gemini-1.5-flash"
@@ -45,13 +41,13 @@ MODELS_PRIORITY = [
 current_key_index = 0
 
 def get_gemini_response(prompt: str) -> str:
-    """Генерация текста с автоматическим переключением ключей и моделей при 429"""
+    """Генерация ответа с ротацией ключей и моделей"""
     global current_key_index
     
     if not API_KEYS:
         raise HTTPException(
             status_code=500, 
-            detail="API-ключи не настроены. Добавьте GEMINI_KEY_1 в Environment Variables на Render."
+            detail="API-ключи не найдены. Добавьте GEMINI_KEY_1 в Environment Variables на Render."
         )
         
     total_keys = len(API_KEYS)
@@ -59,29 +55,39 @@ def get_gemini_response(prompt: str) -> str:
 
     while keys_tried < total_keys:
         active_key = API_KEYS[current_key_index]
-        genai.configure(api_key=active_key)
+        
+        # Создаем клиента с конкретным ключом
+        client = genai.Client(api_key=active_key)
         
         for model_name in MODELS_PRIORITY:
             try:
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content(prompt)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
                 return response.text
                 
-            except ResourceExhausted:
-                # Перебор моделей в рамках одного ключа при лимитах
-                print(f"[Gemini] Модель {model_name} уперлась в лимит на ключе #{current_key_index + 1}. Пробуем следующую модель...")
-                continue
-                
-            except GoogleAPIError as e:
-                print(f"[Gemini API Error] {e}")
+            except APIError as e:
+                # Если 429 (ResourceExhausted / Rate Limit) — пробуем следующую модель/ключ
+                if e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
+                    print(f"[Gemini] Модель {model_name} исчерпала лимит на ключе #{current_key_index + 1}.")
+                    continue
+                else:
+                    print(f"[Gemini API Error] {e}")
+                    break
+            except Exception as e:
+                print(f"[Unexpected Error] {e}")
                 break
 
-        # Если все модели на текущем ключе исчерпаны — меняем ключ
+        # Переключаем ключ
         print(f"[Gemini] Переключаем API-ключ с #{current_key_index + 1}...")
         current_key_index = (current_key_index + 1) % total_keys
         keys_tried += 1
 
-    raise HTTPException(status_code=429, detail="Все API-ключи и модели исчерпали доступные лимиты. Попробуйте чуть позже.")
+    raise HTTPException(
+        status_code=429, 
+        detail="Все API-ключи и модели исчерпали лимиты. Попробуйте позже."
+    )
 
 # ------------------------------------------------------------------
 #  СХЕМЫ ДАННЫХ И API ЭНДПОИНТЫ
@@ -89,9 +95,6 @@ def get_gemini_response(prompt: str) -> str:
 
 class TitleRequest(BaseModel):
     message: str
-
-class ImageGenRequest(BaseModel):
-    prompt: str
 
 class ChatPayload(BaseModel):
     prompt: str
@@ -113,7 +116,7 @@ async def generate_title(req: TitleRequest):
     if not req.message.strip():
         return {"title": "Новый диалог"}
         
-    prompt = f"Придумай краткий заголовок (3-5 слов) для чата на основе этого сообщения: {req.message}"
+    prompt = f"Придумай краткий заголовок (3-5 слов) для чата на основе сообщения: {req.message}"
     try:
         title = get_gemini_response(prompt)
         return {"title": title.strip()}
@@ -121,7 +124,7 @@ async def generate_title(req: TitleRequest):
         return {"title": "Диалог"}
 
 # ------------------------------------------------------------------
-#  ВЕБ-ИНТЕРФЕЙС (HTML / CSS / JS)
+#  ВЕБ-ИНТЕРФЕЙС
 # ------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
@@ -186,3 +189,9 @@ async def get_chat_ui():
     </body>
     </html>
     """
+
+# Запуск сервера uvicorn при вызове `python main.py`
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
