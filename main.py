@@ -18,20 +18,6 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# ------------------------------------------------------------------
-#  БЛОК РОТАЦИИ КЛЮЧЕЙ И МОДЕЛЕЙ (google-genai SDK)
-# ------------------------------------------------------------------
-
-# Собираем доступные ключи из переменных окружения
-API_KEYS = [
-    os.getenv("GEMINI_KEY_1"),
-    os.getenv("GEMINI_KEY_2"),
-    os.getenv("GEMINI_KEY_3"),
-    os.getenv("GEMINI_API_KEY")
-]
-# Оставляем только непустые значения
-API_KEYS = [k for k in API_KEYS if k]
-
 # Приоритет моделей
 MODELS_PRIORITY = [
     "gemini-2.0-flash",
@@ -40,46 +26,59 @@ MODELS_PRIORITY = [
 
 current_key_index = 0
 
+def get_api_keys():
+    """Собираем ключи динамически при каждом запросе"""
+    keys = [
+        os.getenv("GEMINI_KEY_1"),
+        os.getenv("GEMINI_KEY_2"),
+        os.getenv("GEMINI_KEY_3"),
+        os.getenv("GEMINI_API_KEY")
+    ]
+    return [k.strip() for k in keys if k and k.strip()]
+
 def get_gemini_response(prompt: str) -> str:
     """Генерация ответа с ротацией ключей и моделей"""
     global current_key_index
     
-    if not API_KEYS:
+    api_keys = get_api_keys()
+    
+    if not api_keys:
         raise HTTPException(
             status_code=500, 
-            detail="API-ключи не найдены. Убедитесь, что GEMINI_KEY_1 или GEMINI_API_KEY заданы в Environment Variables на Render."
+            detail="API-ключи не найдены. Перейдите в настройки Render -> Environment и добавьте переменную GEMINI_KEY_1 или GEMINI_API_KEY."
         )
         
-    total_keys = len(API_KEYS)
+    total_keys = len(api_keys)
     keys_tried = 0
 
     while keys_tried < total_keys:
-        active_key = API_KEYS[current_key_index]
+        active_key = api_keys[current_key_index % total_keys]
         
-        # Инициализируем клиент локально с явной передачей ключа
-        client = genai.Client(api_key=active_key)
-        
-        for model_name in MODELS_PRIORITY:
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                )
-                return response.text
-                
-            except APIError as e:
-                if e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
-                    print(f"[Gemini] Модель {model_name} исчерпала лимит на ключе #{current_key_index + 1}.")
-                    continue
-                else:
-                    print(f"[Gemini API Error] {e}")
+        try:
+            # Явно передаем ключ в клиент
+            client = genai.Client(api_key=active_key)
+            
+            for model_name in MODELS_PRIORITY:
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                    )
+                    return response.text
+                except APIError as e:
+                    if e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
+                        print(f"[Gemini] Лимит исчерпан для {model_name} на ключе #{current_key_index + 1}.")
+                        continue
+                    else:
+                        print(f"[Gemini API Error] {e}")
+                        break
+                except Exception as e:
+                    print(f"[Unexpected Error] {e}")
                     break
-            except Exception as e:
-                print(f"[Unexpected Error] {e}")
-                break
+        except Exception as e:
+            print(f"[Client Init Error] Ошибка инициализации клиента: {e}")
 
-        # Переключаемся на следующий ключ при ошибках лимита
-        print(f"[Gemini] Переключаем API-ключ с #{current_key_index + 1}...")
+        # Переключаем ключ
         current_key_index = (current_key_index + 1) % total_keys
         keys_tried += 1
 
@@ -89,7 +88,7 @@ def get_gemini_response(prompt: str) -> str:
     )
 
 # ------------------------------------------------------------------
-#  СХЕМЫ ДАННЫХ И API ЭНДПОИНТЫ
+#  API ЭНДПОИНТЫ
 # ------------------------------------------------------------------
 
 class TitleRequest(BaseModel):
