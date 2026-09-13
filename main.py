@@ -45,7 +45,6 @@ def get_gemini_response(prompt: str) -> str:
 
     num_keys = len(api_keys)
     num_models = len(MODELS)
-    # Позволяем пройти по всем комбинациям 2 раза, на случай временной перегрузки
     total_attempts = num_keys * num_models * 2
 
     last_error_msg = ""
@@ -65,18 +64,15 @@ def get_gemini_response(prompt: str) -> str:
         except APIError as e:
             last_error_msg = str(e)
             
-            # Обработка 503 (High Demand / Unavailable) и 429 (Rate Limit / Quota)
             if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e) or "high demand" in str(e).lower():
                 current_model_idx += 1
                 if current_model_idx >= num_models:
                     current_model_idx = 0
                     current_key_idx = (current_key_idx + 1) % num_keys
                 
-                # Делаем паузу полсекунды перед следующей попыткой
                 time.sleep(0.5)
                 continue
                 
-            # Обработка 404 (Модель не найдена)
             elif e.code == 404 or "not found" in str(e).lower() or "no longer available" in str(e).lower():
                 current_model_idx = (current_model_idx + 1) % num_models
                 continue
@@ -118,6 +114,8 @@ async def get_chat_ui():
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+        <!-- Подключение библиотеки для обработки Markdown (выделения, отступы, списки) -->
+        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
         <style>
             :root {
                 --bg-main: #090a0f;
@@ -326,11 +324,26 @@ async def get_chat_ui():
                 border-radius: 16px 16px 16px 4px; 
                 padding: 14px 18px; 
                 font-size: 14px; 
-                line-height: 1.5; 
+                line-height: 1.6; 
                 max-width: 90%; 
-                white-space: pre-wrap; 
                 box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
             }
+
+            /* Красивое оформление Markdown для сообщений ИИ */
+            .msg-bot p { margin-bottom: 12px; }
+            .msg-bot p:last-child { margin-bottom: 0; }
+            .msg-bot strong { color: #ffffff; font-weight: 700; }
+            .msg-bot em { color: #cbd5e1; font-style: italic; }
+            .msg-bot ul, .msg-bot ol { margin: 8px 0 12px 20px; padding-left: 8px; }
+            .msg-bot li { margin-bottom: 4px; }
+            .msg-bot h1, .msg-bot h2, .msg-bot h3, .msg-bot h4 { color: #ffffff; margin: 16px 0 8px 0; font-weight: 700; }
+            .msg-bot h1 { font-size: 18px; }
+            .msg-bot h2 { font-size: 16px; }
+            .msg-bot h3 { font-size: 15px; }
+            .msg-bot blockquote { border-left: 3px solid var(--accent); padding-left: 12px; margin: 8px 0; color: var(--text-muted); }
+            .msg-bot code { background: rgba(255, 255, 255, 0.08); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; color: #f472b6; }
+            .msg-bot pre { background: #090a0f; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 10px 0; border: 1px solid var(--border-color); }
+            .msg-bot pre code { background: transparent; padding: 0; color: #e2e8f0; }
             
             .msg-error { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); color: #fca5a5; }
 
@@ -562,7 +575,8 @@ async def get_chat_ui():
                     botMsg.className = 'msg-bot';
 
                     if (res.ok) {
-                        botMsg.textContent = data.response;
+                        // Рендерим Markdown в чистый HTML через библиотеку marked
+                        botMsg.innerHTML = marked.parse(data.response);
                     } else {
                         botMsg.className = 'msg-bot msg-error';
                         botMsg.textContent = data.detail || 'Произошла ошибка при обработке запроса.';
