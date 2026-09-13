@@ -35,11 +35,8 @@ def get_chat_ui():
         <style>
             body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #131314; color: #e3e3e3; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }}
             .header {{ padding: 10px 20px; background: #1e1f20; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333537; }}
-            
-            /* Стили для заголовка и бейджа бета-теста в шапке */
             .brand-container {{ display: flex; align-items: center; gap: 10px; }}
             .beta-badge {{ background: #b3261e; color: white; font-size: 11px; font-weight: bold; padding: 2px 8px; border-radius: 4px; letter-spacing: 0.5px; text-transform: uppercase; }}
-
             .chat-container {{ flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; max-width: 800px; width: 100%; margin: 0 auto; box-sizing: border-box; }}
             .message {{ padding: 12px 16px; border-radius: 12px; max-width: 80%; line-height: 1.5; }}
             .user {{ background: #004a77; color: #e3e3e3; align-self: flex-end; }}
@@ -51,7 +48,6 @@ def get_chat_ui():
             .mode-select {{ background: #2d2e30; color: white; border: none; padding: 5px 10px; border-radius: 8px; outline: none; cursor: pointer; }}
             img {{ max-width: 100%; border-radius: 8px; margin-top: 10px; }}
 
-            /* Всплывающая плашка на 5 секунд */
             #beta-popup {{
                 position: fixed;
                 top: 20px;
@@ -108,7 +104,7 @@ def get_chat_ui():
             async function sendMessage() {{
                 const input = document.getElementById('userInput');
                 const chatBox = document.getElementById('chatBox');
-                const mode = document.getElementById('modeSelect').value;
+                const mode = document.getElementById('modeSelect',).value;
                 const text = input.value.trim();
                 if (!text) return;
 
