@@ -42,9 +42,9 @@ async def generate_title(req: TitleRequest):
     try:
         response = client.models.generate_content(
             model=CHAT_MODEL,
-            contents=f"Придумай короткое название (не более 3-4 слов, без кавычек) для чата, который начинается с этого сообщения: {req.message}"
+            contents=f"Придумай короткое название (строго 2-3 слова, без кавычек, без списков) для чата, который начинается с этого сообщения: {req.message}"
         )
-        return {"title": response.text.strip().replace('"', '')}
+        return {"title": response.text.strip().replace('"', '').split('\n')[0]}
     except Exception as e:
         return {"title": req.message[:20] + "..."}
 
@@ -133,6 +133,8 @@ async def get_chat_ui():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>Rubinov-AI Assistant</title>
+        <!-- Подключаем Marked.js для красивого рендеринга Markdown -->
+        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
         <style>
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
             body { background: #050505; color: #c0c0c0; display: flex; height: 100dvh; overflow: hidden; position: relative; }
@@ -203,9 +205,19 @@ async def get_chat_ui():
             .chip { background: #0a0a0a; border: 1px solid #1f1f1f; border-radius: 12px; padding: 10px 12px; color: #999; font-size: 0.78rem; cursor: pointer; text-align: left; transition: all 0.2s; display: flex; align-items: center; gap: 6px; }
             .chip:hover { background: #161616; border-color: #333; color: #ddd; transform: translateY(-1px); }
 
-            .message { padding: 12px 16px; border-radius: 14px; max-width: 80%; line-height: 1.5; overflow-wrap: break-word; white-space: pre-wrap; font-size: 0.9rem; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
-            .message.user { background: #222222 !important; color: #f0f0f0 !important; align-self: flex-end; border: 1px solid #333; border-bottom-right-radius: 4px; }
+            .message { padding: 12px 16px; border-radius: 14px; max-width: 80%; line-height: 1.5; overflow-wrap: break-word; font-size: 0.9rem; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+            .message.user { background: #222222 !important; color: #f0f0f0 !important; align-self: flex-end; border: 1px solid #333; border-bottom-right-radius: 4px; white-space: pre-wrap; }
             .message.ai { background: #0c0c0c; color: #c5c5c5; border: 1px solid #1f1f1f; align-self: flex-start; border-bottom-left-radius: 4px; }
+            
+            /* Стили для отрендеренного Markdown внутри сообщений ИИ */
+            .message.ai p { margin-bottom: 8px; }
+            .message.ai p:last-child { margin-bottom: 0; }
+            .message.ai ul, .message.ai ol { margin-left: 20px; margin-bottom: 8px; }
+            .message.ai code { background: #1a1a1a; padding: 2px 5px; border-radius: 4px; font-family: monospace; font-size: 0.85rem; }
+            .message.ai pre { background: #141414; padding: 10px; border-radius: 8px; overflow-x: auto; margin: 8px 0; border: 1px solid #222; }
+            .message.ai pre code { background: transparent; padding: 0; }
+            .message.ai strong { color: #fff; }
+            .message.ai hr { border: none; border-top: 1px solid #222; margin: 10px 0; }
             .message img { max-width: 100%; border-radius: 10px; margin-top: 8px; display: block; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
             
             .input-container { padding: 12px 20px 20px; background: #050505; }
@@ -455,7 +467,11 @@ async def get_chat_ui():
                 chat.messages.forEach(m => {
                     const msgDiv = document.createElement('div');
                     msgDiv.className = `message ${m.role}`;
-                    msgDiv.innerHTML = m.content;
+                    if (m.role === 'ai') {
+                        msgDiv.innerHTML = marked.parse(m.content);
+                    } else {
+                        msgDiv.innerText = m.content;
+                    }
                     container.appendChild(msgDiv);
                 });
                 container.scrollTop = container.scrollHeight;
@@ -477,9 +493,9 @@ async def get_chat_ui():
                 userMsgDiv.className = 'message user';
                 let displayContent = text;
                 if (selectedFile) {
-                    displayContent = `[Файл: ${selectedFile.name}]<br>` + displayContent;
+                    displayContent = `[Файл: ${selectedFile.name}]\n` + displayContent;
                 }
-                userMsgDiv.innerHTML = displayContent;
+                userMsgDiv.innerText = displayContent;
                 container.appendChild(userMsgDiv);
 
                 input.value = '';
@@ -533,7 +549,7 @@ async def get_chat_ui():
 
                     const aiMsgDiv = document.createElement('div');
                     aiMsgDiv.className = 'message ai';
-                    aiMsgDiv.innerHTML = responseHtml;
+                    aiMsgDiv.innerHTML = marked.parse(responseHtml);
                     container.appendChild(aiMsgDiv);
 
                     if (!currentChatId) {
@@ -571,7 +587,6 @@ async def get_chat_ui():
                             chat.messages.push({ role: 'user', content: displayContent });
                             chat.messages.push({ role: 'ai', content: responseHtml });
                         } else {
-                            // Если чат по какой-то причине пропал из массива, создаем его заново
                             chats.unshift({
                                 id: currentChatId,
                                 title: document.getElementById('currentChatTitle').innerText,
