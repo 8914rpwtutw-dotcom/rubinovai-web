@@ -18,14 +18,12 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Актуальный список поддерживаемых моделей Gemini
 MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro"]
 
 current_key_idx = 0
 current_model_idx = 0
 
 def get_api_keys():
-    """Собираем API-ключи из переменных окружения"""
     keys = [
         os.getenv("GEMINI_KEY_1"),
         os.getenv("GEMINI_KEY_2"),
@@ -35,7 +33,6 @@ def get_api_keys():
     return [k.strip() for k in keys if k and k.strip()]
 
 def get_gemini_response(prompt: str) -> str:
-    """Последовательный перебор API-ключей и поддерживаемых моделей"""
     global current_key_idx, current_model_idx
     
     api_keys = get_api_keys()
@@ -56,9 +53,7 @@ def get_gemini_response(prompt: str) -> str:
         active_model = MODELS[current_model_idx % num_models]
 
         try:
-            # Инициализация клиента google-genai
             client = genai.Client(api_key=active_key)
-            
             response = client.models.generate_content(
                 model=active_model,
                 contents=prompt
@@ -67,13 +62,9 @@ def get_gemini_response(prompt: str) -> str:
 
         except APIError as e:
             last_error_msg = str(e)
-            print(f"[API Error {e.code}] Модель {active_model}: {e.message}")
-            
-            # При 404 (модель устарела/не найдена) переходим к следующей модели
             if e.code == 404 or "not found" in str(e).lower() or "no longer available" in str(e).lower():
                 current_model_idx = (current_model_idx + 1) % num_models
                 continue
-            # При 429 (лимит запросов) переходим к следующему ключу
             elif e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
                 current_model_idx += 1
                 if current_model_idx >= num_models:
@@ -84,17 +75,12 @@ def get_gemini_response(prompt: str) -> str:
                 break
         except Exception as e:
             last_error_msg = str(e)
-            print(f"[Unexpected Error] {e}")
             break
 
     raise HTTPException(
         status_code=500,
-        detail=f"Ошибка генерации ответа. Проверьте валидность API-ключей. Детали: {last_error_msg}"
+        detail=f"Ошибка генерации ответа. Детали: {last_error_msg}"
     )
-
-# ------------------------------------------------------------------
-#  API ENDPOINTS
-# ------------------------------------------------------------------
 
 class ChatPayload(BaseModel):
     prompt: str
@@ -111,10 +97,6 @@ async def chat_endpoint(payload: ChatPayload):
     answer = get_gemini_response(payload.prompt)
     return {"response": answer}
 
-# ------------------------------------------------------------------
-#  HTML/CSS/JS ИНТЕРФЕЙС
-# ------------------------------------------------------------------
-
 @app.get("/", response_class=HTMLResponse)
 async def get_chat_ui():
     return """
@@ -122,7 +104,7 @@ async def get_chat_ui():
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>Rubinov AI</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -142,8 +124,27 @@ async def get_chat_ui():
                 --bot-msg-bg: #11131c;
             }
 
-            * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; }
-            body { background: var(--bg-main); color: var(--text-main); height: 100vh; display: flex; overflow: hidden; }
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
+            body { background: var(--bg-main); color: var(--text-main); height: 100vh; display: flex; overflow: hidden; position: relative; }
+
+            /* Backdrop Overlay for Mobile */
+            #sidebar-overlay {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background: rgba(0, 0, 0, 0.6);
+                backdrop-filter: blur(4px);
+                z-index: 40;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+            }
+            #sidebar-overlay.active {
+                display: block;
+                opacity: 1;
+            }
 
             /* Sidebar */
             #sidebar { 
@@ -153,6 +154,8 @@ async def get_chat_ui():
                 display: flex; 
                 flex-direction: column; 
                 padding: 20px 16px; 
+                z-index: 50;
+                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             }
             .brand { 
                 display: flex; 
@@ -195,7 +198,6 @@ async def get_chat_ui():
             .btn-new-chat:hover { 
                 background: rgba(255, 255, 255, 0.08); 
                 border-color: var(--border-hover); 
-                transform: translateY(-1px);
             }
 
             .chats-header { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); font-weight: 700; margin-bottom: 12px; padding: 0 4px; text-transform: uppercase; letter-spacing: 0.8px; }
@@ -222,19 +224,32 @@ async def get_chat_ui():
             .status-dot { width: 8px; height: 8px; background: #10b981; border-radius: 50%; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
 
             /* Main Chat Area */
-            #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; }
+            #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100vh; }
             
             #chat-header { 
-                height: 64px; 
+                height: 60px; 
                 border-bottom: 1px solid var(--border-color); 
                 display: flex; 
                 align-items: center; 
                 justify-content: space-between; 
-                padding: 0 32px; 
-                background: rgba(15, 17, 23, 0.7); 
+                padding: 0 20px; 
+                background: rgba(15, 17, 23, 0.85); 
                 backdrop-filter: blur(12px);
             }
+            .header-left { display: flex; align-items: center; gap: 12px; }
+            .menu-toggle {
+                display: none;
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid var(--border-color);
+                color: #ffffff;
+                border-radius: 8px;
+                padding: 8px;
+                cursor: pointer;
+                align-items: center;
+                justify-content: center;
+            }
             #chat-header h3 { font-size: 15px; font-weight: 600; color: #ffffff; }
+            
             .btn-clear { 
                 background: rgba(255, 255, 255, 0.05); 
                 color: var(--text-muted); 
@@ -251,10 +266,10 @@ async def get_chat_ui():
             #chat-container { 
                 flex: 1; 
                 overflow-y: auto; 
-                padding: 32px; 
+                padding: 20px; 
                 display: flex; 
                 flex-direction: column; 
-                gap: 24px; 
+                gap: 20px; 
                 max-width: 900px;
                 width: 100%;
                 margin: 0 auto;
@@ -275,10 +290,10 @@ async def get_chat_ui():
                 color: #ffffff; 
                 border: 1px solid rgba(255, 255, 255, 0.1);
                 border-radius: 16px 16px 4px 16px; 
-                padding: 14px 20px; 
+                padding: 12px 16px; 
                 font-size: 14px; 
-                line-height: 1.6;
-                max-width: 80%; 
+                line-height: 1.5;
+                max-width: 85%; 
                 box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
             }
             
@@ -287,17 +302,16 @@ async def get_chat_ui():
                 border: 1px solid var(--border-color); 
                 color: #e2e8f0; 
                 border-radius: 16px 16px 16px 4px; 
-                padding: 18px 22px; 
+                padding: 14px 18px; 
                 font-size: 14px; 
-                line-height: 1.6; 
-                max-width: 85%; 
+                line-height: 1.5; 
+                max-width: 90%; 
                 white-space: pre-wrap; 
                 box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
             }
             
             .msg-error { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); color: #fca5a5; }
 
-            /* Плашка ожидания */
             .msg-bot.msg-thinking {
                 padding: 8px 12px;
                 border-radius: 10px;
@@ -320,7 +334,7 @@ async def get_chat_ui():
 
             /* Input Area */
             #input-wrapper {
-                padding: 20px 32px 28px 32px;
+                padding: 12px 16px 20px 16px;
                 max-width: 900px;
                 width: 100%;
                 margin: 0 auto;
@@ -330,16 +344,14 @@ async def get_chat_ui():
                 background: var(--bg-sidebar); 
                 border: 1px solid var(--border-color); 
                 border-radius: 16px; 
-                padding: 8px 8px 8px 18px; 
+                padding: 6px 6px 6px 14px; 
                 display: flex; 
-                gap: 12px; 
+                gap: 8px; 
                 align-items: center; 
-                transition: all 0.2s ease;
                 box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
             }
             #input-container:focus-within { 
                 border-color: var(--accent); 
-                box-shadow: 0 8px 24px rgba(99, 102, 241, 0.15);
             }
 
             #prompt-input { 
@@ -357,17 +369,40 @@ async def get_chat_ui():
                 color: #ffffff; 
                 border: none; 
                 border-radius: 10px; 
-                padding: 10px 18px; 
+                padding: 10px 16px; 
                 font-size: 13px; 
                 font-weight: 600; 
                 cursor: pointer; 
                 transition: all 0.2s ease; 
             }
-            .btn-send:hover { background: var(--accent-hover); transform: scale(1.02); }
-            .btn-send:active { transform: scale(0.98); }
+
+            /* Мобильная адаптация (до 768px) */
+            @media (max-width: 768px) {
+                #sidebar {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    height: 100vh;
+                    transform: translateX(-100%);
+                }
+                #sidebar.open {
+                    transform: translateX(0);
+                }
+                .menu-toggle {
+                    display: flex;
+                }
+                #chat-header {
+                    padding: 0 16px;
+                }
+                #chat-container {
+                    padding: 16px;
+                }
+            }
         </style>
     </head>
     <body>
+        <div id="sidebar-overlay" onclick="toggleSidebar(false)"></div>
+
         <div id="sidebar">
             <div class="brand">
                 <div class="brand-logo">R</div>
@@ -387,9 +422,9 @@ async def get_chat_ui():
             </div>
 
             <div id="chats-list">
-                <div class="chat-item">
+                <div class="chat-item" onclick="toggleSidebar(false)">
                     <span>Текущая сессия</span>
-                    <span class="close-btn" onclick="deleteChat(this)">×</span>
+                    <span class="close-btn" onclick="event.stopPropagation(); deleteChat(this)">×</span>
                 </div>
             </div>
 
@@ -401,21 +436,39 @@ async def get_chat_ui():
 
         <div id="main">
             <div id="chat-header">
-                <h3>Диалог</h3>
-                <button class="btn-clear" onclick="clearMessages()">Очистить чат</button>
+                <div class="header-left">
+                    <button class="menu-toggle" onclick="toggleSidebar(true)">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                    </button>
+                    <h3>Диалог</h3>
+                </div>
+                <button class="btn-clear" onclick="clearMessages()">Очистить</button>
             </div>
 
             <div id="chat-container"></div>
 
             <div id="input-wrapper">
                 <div id="input-container">
-                    <input type="text" id="prompt-input" placeholder="Спросите что-нибудь у Rubinov AI..." onkeydown="handleKeyPress(event)" />
+                    <input type="text" id="prompt-input" placeholder="Спросите что-нибудь..." onkeydown="handleKeyPress(event)" />
                     <button class="btn-send" onclick="sendMessage()">Отправить</button>
                 </div>
             </div>
         </div>
 
         <script>
+            function toggleSidebar(open) {
+                const sidebar = document.getElementById('sidebar');
+                const overlay = document.getElementById('sidebar-overlay');
+                
+                if (open) {
+                    sidebar.classList.add('open');
+                    overlay.classList.add('active');
+                } else {
+                    sidebar.classList.remove('open');
+                    overlay.classList.remove('active');
+                }
+            }
+
             function handleKeyPress(e) {
                 if (e.key === 'Enter') {
                     sendMessage();
@@ -428,6 +481,7 @@ async def get_chat_ui():
 
             function createNewChat() {
                 clearMessages();
+                toggleSidebar(false);
             }
 
             function deleteChat(element) {
@@ -441,7 +495,6 @@ async def get_chat_ui():
 
                 const chat = document.getElementById('chat-container');
 
-                // Сообщение пользователя
                 const userRow = document.createElement('div');
                 userRow.className = 'msg-row user-row';
                 userRow.innerHTML = `<div class="msg-user">${escapeHtml(text)}</div>`;
@@ -450,7 +503,6 @@ async def get_chat_ui():
                 input.value = '';
                 chat.scrollTop = chat.scrollHeight;
 
-                // Индикатор ответа
                 const botRow = document.createElement('div');
                 botRow.className = 'msg-row bot-row';
                 const botMsg = document.createElement('div');
