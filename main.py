@@ -18,8 +18,8 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Стабильная модель Google Gemini
-MODELS = ["gemini-1.5-flash"]
+# Актуальная и стабильная модель Gemini
+MODELS = ["gemini-2.5-flash"]
 
 current_key_idx = 0
 current_model_idx = 0
@@ -66,7 +66,7 @@ def get_gemini_response(prompt: str) -> str:
                 print(f"[API Error] Модель {active_model} не найдена (404).")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Модель {active_model} недоступна. Проверьте правильность подключения."
+                    detail=f"Модель {active_model} недоступна. Проверьте актуальность имени модели."
                 )
             elif e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
                 print(f"[Quota] Ключ #{current_key_idx + 1} ({active_model}) исчерпан. Переключаем...")
@@ -162,7 +162,7 @@ async def get_chat_ui():
             .msg-bot { background: #0c0e12; border: 1px solid #1e242d; color: #e2e8f0; border-radius: 12px; padding: 16px 20px; font-size: 14px; max-width: 85%; font-family: monospace; white-space: pre-wrap; line-height: 1.5; }
             .msg-error { background: #2a1215; border-color: #5c1d24; color: #f87171; }
 
-            /* Уменьшенная в 3 раза плашка ожидания */
+            /* Компактная плашка ожидания */
             .msg-bot.msg-thinking {
                 padding: 5px 8px;
                 border-radius: 6px;
@@ -268,7 +268,7 @@ async def get_chat_ui():
                 input.value = '';
                 chat.scrollTop = chat.scrollHeight;
 
-                // Уменьшенная плашка ожидания
+                // Плашка ожидания
                 const botRow = document.createElement('div');
                 botRow.className = 'msg-row bot-row';
                 const botMsg = document.createElement('div');
@@ -295,7 +295,6 @@ async def get_chat_ui():
                     
                     const data = await res.json();
 
-                    // Возвращаем стандартный класс для текстового ответа
                     botMsg.className = 'msg-bot';
 
                     if (res.ok) {
