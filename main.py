@@ -22,14 +22,14 @@ app.add_middleware(
 #  БЛОК РОТАЦИИ КЛЮЧЕЙ И МОДЕЛЕЙ (google-genai SDK)
 # ------------------------------------------------------------------
 
-# Собираем ключи из переменных окружения
+# Собираем доступные ключи из переменных окружения
 API_KEYS = [
     os.getenv("GEMINI_KEY_1"),
     os.getenv("GEMINI_KEY_2"),
     os.getenv("GEMINI_KEY_3"),
-    os.getenv("GEMINI_API_KEY")  # на случай дефолтного имени
+    os.getenv("GEMINI_API_KEY")
 ]
-# Оставляем только заполненные
+# Оставляем только непустые значения
 API_KEYS = [k for k in API_KEYS if k]
 
 # Приоритет моделей
@@ -47,7 +47,7 @@ def get_gemini_response(prompt: str) -> str:
     if not API_KEYS:
         raise HTTPException(
             status_code=500, 
-            detail="API-ключи не найдены. Добавьте GEMINI_KEY_1 в Environment Variables на Render."
+            detail="API-ключи не найдены. Убедитесь, что GEMINI_KEY_1 или GEMINI_API_KEY заданы в Environment Variables на Render."
         )
         
     total_keys = len(API_KEYS)
@@ -56,7 +56,7 @@ def get_gemini_response(prompt: str) -> str:
     while keys_tried < total_keys:
         active_key = API_KEYS[current_key_index]
         
-        # Создаем клиента с конкретным ключом
+        # Инициализируем клиент локально с явной передачей ключа
         client = genai.Client(api_key=active_key)
         
         for model_name in MODELS_PRIORITY:
@@ -68,7 +68,6 @@ def get_gemini_response(prompt: str) -> str:
                 return response.text
                 
             except APIError as e:
-                # Если 429 (ResourceExhausted / Rate Limit) — пробуем следующую модель/ключ
                 if e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
                     print(f"[Gemini] Модель {model_name} исчерпала лимит на ключе #{current_key_index + 1}.")
                     continue
@@ -79,7 +78,7 @@ def get_gemini_response(prompt: str) -> str:
                 print(f"[Unexpected Error] {e}")
                 break
 
-        # Переключаем ключ
+        # Переключаемся на следующий ключ при ошибках лимита
         print(f"[Gemini] Переключаем API-ключ с #{current_key_index + 1}...")
         current_key_index = (current_key_index + 1) % total_keys
         keys_tried += 1
@@ -190,7 +189,6 @@ async def get_chat_ui():
     </html>
     """
 
-# Запуск сервера uvicorn при вызове `python main.py`
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 10000))
