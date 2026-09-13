@@ -18,8 +18,8 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Список моделей с автопереключением
-MODELS = ["gemini-2.5-flash", "gemini-1.5-flash"]
+# Список приоритетных моделей Gemini 2.5 / 2.0
+MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
 
 current_key_idx = 0
 current_model_idx = 0
@@ -56,7 +56,9 @@ def get_gemini_response(prompt: str) -> str:
         active_model = MODELS[current_model_idx % num_models]
 
         try:
+            # Вызов клиента библиотеки google-genai
             client = genai.Client(api_key=active_key)
+            
             response = client.models.generate_content(
                 model=active_model,
                 contents=prompt
@@ -65,19 +67,20 @@ def get_gemini_response(prompt: str) -> str:
 
         except APIError as e:
             last_error_msg = str(e)
-            if e.code == 404:
-                print(f"[API Error 404] Модель {active_model} не найдена. Переключаем модель...")
+            print(f"[API Error {e.code}] Модель {active_model}: {e.message}")
+            
+            # Если модель не найдена (404), переключаем модель на следующую
+            if e.code == 404 or "not found" in str(e).lower():
                 current_model_idx = (current_model_idx + 1) % num_models
                 continue
+            # Если лимит исчерпан (429), переключаем ключ
             elif e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
-                print(f"[Quota] Ключ #{current_key_idx + 1} ({active_model}) исчерпан. Переключаем...")
                 current_model_idx += 1
                 if current_model_idx >= num_models:
                     current_model_idx = 0
                     current_key_idx = (current_key_idx + 1) % num_keys
                 continue
             else:
-                print(f"[API Error] {e}")
                 break
         except Exception as e:
             last_error_msg = str(e)
@@ -86,7 +89,7 @@ def get_gemini_response(prompt: str) -> str:
 
     raise HTTPException(
         status_code=500,
-        detail=f"Не удалось получить ответ от моделей Gemini. Детали: {last_error_msg}"
+        detail=f"Ошибка генерации ответа. Проверьте валидность API-ключей. Детали: {last_error_msg}"
     )
 
 # ------------------------------------------------------------------
@@ -120,7 +123,7 @@ async def get_chat_ui():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Rubinov-AI</title>
+        <title>Rubinov AI</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -294,7 +297,7 @@ async def get_chat_ui():
             
             .msg-error { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); color: #fca5a5; }
 
-            /* Микро-плашка ожидания */
+            /* Компактная плашка ожидания */
             .msg-bot.msg-thinking {
                 padding: 6px 10px;
                 border-radius: 10px;
