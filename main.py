@@ -18,14 +18,14 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Актуальная модель Gemini 3.6 Flash
-MODELS = ["gemini-3.6-flash"]
+# Стабильная модель Google Gemini
+MODELS = ["gemini-1.5-flash"]
 
 current_key_idx = 0
 current_model_idx = 0
 
 def get_api_keys():
-    """Собираем API-ключи из окружения"""
+    """Собираем API-ключи из переменных окружения"""
     keys = [
         os.getenv("GEMINI_KEY_1"),
         os.getenv("GEMINI_KEY_2"),
@@ -35,7 +35,7 @@ def get_api_keys():
     return [k.strip() for k in keys if k and k.strip()]
 
 def get_gemini_response(prompt: str) -> str:
-    """Последовательный ротационный перебор ключей"""
+    """Последовательный перебор API-ключей"""
     global current_key_idx, current_model_idx
     
     api_keys = get_api_keys()
@@ -63,10 +63,10 @@ def get_gemini_response(prompt: str) -> str:
 
         except APIError as e:
             if e.code == 404:
-                print(f"[API Error] Модель {active_model} недоступна (404).")
+                print(f"[API Error] Модель {active_model} не найдена (404).")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Модель {active_model} недоступна. Проверьте правильность настройки API."
+                    detail=f"Модель {active_model} недоступна. Проверьте правильность подключения."
                 )
             elif e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
                 print(f"[Quota] Ключ #{current_key_idx + 1} ({active_model}) исчерпан. Переключаем...")
@@ -258,7 +258,7 @@ async def get_chat_ui():
                 input.value = '';
                 chat.scrollTop = chat.scrollHeight;
 
-                // Создание блока ответа с АНИМАЦИЕЙ
+                // Анимация ожидания
                 const botRow = document.createElement('div');
                 botRow.className = 'msg-row bot-row';
                 const botMsg = document.createElement('div');
