@@ -2,4 +2,4 @@ fastapi
 uvicorn
 google-genai
 pydantic
-pillow
+python-multipart
