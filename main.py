@@ -18,86 +18,96 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Порядок моделей для проверки
-MODELS_PRIORITY = [
-    "gemini-2.0-flash",
-    "gemini-1.5-flash"
-]
+# Модели в порядке приоритета для каждого ключа
+MODELS = ["gemini-2.0-flash", "gemini-1.5-flash"]
 
-current_key_index = 0
+# Глобальные индексы для точной последовательности
+current_key_idx = 0
+current_model_idx = 0
 
 def get_api_keys():
-    """Собираем динамически все ключи из Environment Variables"""
+    """Собираем валидные API-ключи"""
     keys = [
         os.getenv("GEMINI_KEY_1"),
         os.getenv("GEMINI_KEY_2"),
-        os.getenv("GEMINI_KEY_3"),
         os.getenv("GEMINI_API_KEY")
     ]
-    return [k.strip() for k in keys if k and k.strip()]
+    valid_keys = [k.strip() for k in keys if k and k.strip()]
+    return valid_keys
 
-def get_gemini_response(prompt: str, model_override: str = None) -> str:
-    """Генерация ответа с ротацией ключей и моделей"""
-    global current_key_index
+def get_gemini_response(prompt: str) -> str:
+    """
+    Каскадная логика:
+    Ключ 1 -> gemini-2.0-flash
+    Ключ 1 -> gemini-1.5-flash
+    Ключ 2 -> gemini-2.0-flash
+    Ключ 2 -> gemini-1.5-flash
+    ... и по кругу заново
+    """
+    global current_key_idx, current_model_idx
     
     api_keys = get_api_keys()
     if not api_keys:
         raise HTTPException(
-            status_code=500, 
-            detail="API-ключи не найдены. Укажите GEMINI_KEY_1 и GEMINI_KEY_2 в Environment Variables на Render."
+            status_code=500,
+            detail="API-ключи не найдены в Environment Variables на Render."
         )
-        
-    total_keys = len(api_keys)
-    keys_tried = 0
-    
-    # Определяем список моделей для обхода
-    models_to_try = [model_override] if model_override else MODELS_PRIORITY
 
-    while keys_tried < total_keys:
-        active_key = api_keys[current_key_index % total_keys]
-        
+    num_keys = len(api_keys)
+    num_models = len(MODELS)
+    total_steps = num_keys * num_models
+    steps_tried = 0
+
+    while steps_tried < total_steps:
+        # Текущий ключ и текущая модель
+        active_key = api_keys[current_key_idx % num_keys]
+        active_model = MODELS[current_model_idx % num_models]
+
         try:
             client = genai.Client(api_key=active_key)
-            
-            for model_name in models_to_try:
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                    )
-                    return response.text
-                except APIError as e:
-                    if e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
-                        print(f"[Gemini] Лимит исчерпан для {model_name} на ключе #{current_key_index + 1}.")
-                        continue
-                    else:
-                        print(f"[Gemini API Error] {e}")
-                        break
-                except Exception as e:
-                    print(f"[Unexpected Error] {e}")
-                    break
-        except Exception as e:
-            print(f"[Client Init Error] {e}")
+            response = client.models.generate_content(
+                model=active_model,
+                contents=prompt
+            )
+            return response.text
 
-        # Переключаем на следующий ключ
-        current_key_index = (current_key_index + 1) % total_keys
-        keys_tried += 1
+        except APIError as e:
+            if e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
+                print(f"[Quota Exceeded] Ключ #{current_key_idx + 1}, модель {active_model} исчерпана. Переключаем...")
+                
+                # Логика сдвига: сначала пробуем 1.5 флеш на текущем ключе, затем следующий ключ
+                current_model_idx += 1
+                if current_model_idx >= num_models:
+                    current_model_idx = 0
+                    current_key_idx = (current_key_idx + 1) % num_keys
+                
+                steps_tried += 1
+                continue
+            else:
+                print(f"[API Error] {e}")
+                break
+        except Exception as e:
+            print(f"[Unexpected Error] {e}")
+            break
+
+        # В случае нетипичной ошибки переходим к следующему шагу
+        current_model_idx += 1
+        if current_model_idx >= num_models:
+            current_model_idx = 0
+            current_key_idx = (current_key_idx + 1) % num_keys
+        steps_tried += 1
 
     raise HTTPException(
-        status_code=429, 
-        detail="Оба API-ключа исчерпали бесплатные лимиты Google Gemini. Пожалуйста, подождите 1-2 минуты и повторите попытку."
+        status_code=429,
+        detail="Все ключи и модели исчерпали лимиты. Попробуйте через 1-2 минуты."
     )
 
 # ------------------------------------------------------------------
-#  API ЭНДПОИНТЫ
+#  API ENDPOINTS
 # ------------------------------------------------------------------
-
-class TitleRequest(BaseModel):
-    message: str
 
 class ChatPayload(BaseModel):
     prompt: str
-    model: str = None
 
 @app.get("/health")
 def health_check():
@@ -108,23 +118,11 @@ async def chat_endpoint(payload: ChatPayload):
     if not payload.prompt.strip():
         raise HTTPException(status_code=400, detail="Текст запроса не может быть пустым")
     
-    answer = get_gemini_response(payload.prompt, payload.model)
+    answer = get_gemini_response(payload.prompt)
     return {"response": answer}
 
-@app.post("/api/generate-title")
-async def generate_title(req: TitleRequest):
-    if not req.message.strip():
-        return {"title": "Новый диалог"}
-        
-    prompt = f"Придумай краткий заголовок (3-5 слов) для чата на основе сообщения: {req.message}"
-    try:
-        title = get_gemini_response(prompt)
-        return {"title": title.strip().strip('"')}
-    except Exception:
-        return {"title": "Новый чат"}
-
 # ------------------------------------------------------------------
-#  ПОЛНОЦЕННЫЙ ВЕБ-ИНТЕРФЕЙС
+#  HTML/CSS/JS ИНТЕРФЕЙС (Точная копия интерфейса со скриншота)
 # ------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
@@ -135,77 +133,117 @@ async def get_chat_ui():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Rubinov AI UI</title>
-        <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+        <title>Rubinov-AI Web</title>
         <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; }
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; height: 100vh; display: flex; overflow: hidden; }
-            
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+            body { background: #050505; color: #e2e8f0; height: 100vh; display: flex; overflow: hidden; }
+
             /* Sidebar */
-            #sidebar { width: 260px; background: #1e293b; border-right: 1px solid #334155; display: flex; flex-direction: column; padding: 15px; }
-            .new-chat-btn { background: #2563eb; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: 0.2s; }
-            .new-chat-btn:hover { background: #1d4ed8; }
-            #history-list { flex: 1; overflow-y: auto; margin-top: 15px; display: flex; flex-direction: column; gap: 8px; }
-            .history-item { padding: 10px; border-radius: 6px; background: #334155; cursor: pointer; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-            .history-item:hover { background: #475569; }
+            #sidebar { width: 260px; background: #0b0d0f; border-right: 1px solid #1e232a; display: flex; flex-direction: column; padding: 16px; }
+            .brand { margin-bottom: 20px; }
+            .brand h2 { font-size: 16px; font-weight: 700; color: #ffffff; letter-spacing: 0.5px; }
+            .brand span { font-size: 11px; color: #64748b; font-weight: 600; }
 
-            /* Main Area */
-            #main { flex: 1; display: flex; flex-direction: column; background: #0f172a; }
-            #header { padding: 15px 20px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
-            #model-select { background: #1e293b; color: white; border: 1px solid #475569; padding: 8px 12px; border-radius: 6px; outline: none; }
+            .btn-new-chat { background: transparent; color: #ffffff; border: 1px solid #2a303c; padding: 10px 14px; border-radius: 20px; font-size: 13px; font-weight: 500; cursor: pointer; text-align: left; margin-bottom: 24px; transition: 0.2s; }
+            .btn-new-chat:hover { background: #161b22; border-color: #3b4454; }
 
-            #chat-container { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
-            .message { max-width: 80%; padding: 12px 16px; border-radius: 12px; line-height: 1.5; font-size: 15px; white-space: pre-wrap; }
-            .user { background: #2563eb; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
-            .bot { background: #1e293b; color: #f8fafc; align-self: flex-start; border-bottom-left-radius: 2px; border: 1px solid #334155; }
-            .error { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; }
+            .chats-header { display: flex; justify-content: space-between; font-size: 11px; color: #475569; font-weight: 700; margin-bottom: 12px; letter-spacing: 0.5px; }
+            
+            #chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+            .chat-item { background: #12161b; border: 1px solid #1e242d; border-radius: 10px; padding: 12px 14px; font-size: 13px; color: #e2e8f0; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+            .chat-item:hover { background: #1a2029; }
+            .chat-item .close-btn { color: #64748b; font-size: 14px; cursor: pointer; }
+            .chat-item .close-btn:hover { color: #ef4444; }
 
-            #input-area { padding: 20px; border-top: 1px solid #334155; display: flex; gap: 10px; }
-            textarea { flex: 1; background: #1e293b; border: 1px solid #475569; color: white; padding: 12px; border-radius: 8px; resize: none; height: 50px; font-family: inherit; outline: none; }
-            textarea:focus { border-color: #2563eb; }
-            #send-btn { background: #2563eb; color: white; border: none; width: 50px; height: 50px; border-radius: 8px; cursor: pointer; font-size: 18px; transition: 0.2s; }
-            #send-btn:hover { background: #1d4ed8; }
+            .sidebar-footer { font-size: 12px; color: #64748b; display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 12px; }
+            .status-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; display: inline-block; }
+
+            /* Main Chat Area */
+            #main { flex: 1; display: flex; flex-direction: column; background: #000000; }
+            
+            #chat-header { height: 55px; border-bottom: 1px solid #14181d; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; }
+            #chat-header h3 { font-size: 15px; font-weight: 500; color: #e2e8f0; }
+            .btn-clear { background: #12161b; color: #94a3b8; border: 1px solid #1e242d; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+            .btn-clear:hover { background: #1a2029; color: #ffffff; }
+
+            #chat-container { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+            
+            /* Message Blocks */
+            .msg-row { display: flex; width: 100%; }
+            .msg-row.user-row { justify-content: flex-end; }
+            .msg-row.bot-row { justify-content: flex-start; }
+
+            .msg-user { background: #22262c; color: #ffffff; border-radius: 10px; padding: 12px 18px; font-size: 14px; max-width: 75%; }
+            .msg-bot { background: #0c0e12; border: 1px solid #1e242d; color: #e2e8f0; border-radius: 12px; padding: 16px 20px; font-size: 14px; max-width: 85%; font-family: monospace; white-space: pre-wrap; line-height: 1.5; }
+            .msg-error { background: #2a1215; border-color: #5c1d24; color: #f87171; }
+
+            /* Input Area */
+            #input-container { padding: 16px 24px 24px 24px; display: flex; gap: 12px; align-items: center; }
+            #prompt-input { flex: 1; background: #0b0d0f; border: 1px solid #1e242d; border-radius: 12px; padding: 14px 18px; color: #ffffff; font-size: 14px; outline: none; transition: 0.2s; }
+            #prompt-input:focus { border-color: #3b4454; }
+            
+            .btn-send { background: #22262c; color: #ffffff; border: 1px solid #333943; border-radius: 20px; padding: 12px 24px; font-size: 14px; font-weight: 500; cursor: pointer; transition: 0.2s; }
+            .btn-send:hover { background: #333943; }
         </style>
     </head>
     <body>
         <div id="sidebar">
-            <button class="new-chat-btn" onclick="startNewChat()">
-                <i class="fa-solid fa-plus"></i> Новый чат
-            </button>
-            <div id="history-list"></div>
+            <div class="brand">
+                <h2>RUBINOV-AI</h2>
+                <span>AI-ASSISTANT</span>
+            </div>
+
+            <button class="btn-new-chat" onclick="createNewChat()">+ Новый чат</button>
+
+            <div class="chats-header">
+                <span>ЧАТЫ</span>
+                <span>MAX 5</span>
+            </div>
+
+            <div id="chats-list">
+                <div class="chat-item">
+                    <span>Закат в нейросети</span>
+                    <span class="close-btn" onclick="deleteChat(this)">×</span>
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <span class="status-dot"></span>
+                <span>Streaming Active</span>
+            </div>
         </div>
 
         <div id="main">
-            <div id="header">
-                <h3 id="chat-title">Новый диалог</h3>
-                <select id="model-select">
-                    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                    <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-                </select>
+            <div id="chat-header">
+                <h3>Диалог</h3>
+                <button class="btn-clear" onclick="clearMessages()">🗑 Очистить</button>
             </div>
 
             <div id="chat-container"></div>
 
-            <div id="input-area">
-                <textarea id="prompt-input" placeholder="Введите ваш запрос..." onkeydown="handleKey(event)"></textarea>
-                <button id="send-btn" onclick="sendMessage()"><i class="fa-solid fa-paper-plane"></i></button>
+            <div id="input-container">
+                <input type="text" idprompt-input" id="prompt-input" placeholder="Введите сообщение..." onkeydown="handleKeyPress(event)" />
+                <button class="btn-send" onclick="sendMessage()">Отправить</button>
             </div>
         </div>
 
         <script>
-            let currentChatMessages = [];
-
-            function handleKey(e) {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
+            function handleKeyPress(e) {
+                if (e.key === 'Enter') {
                     sendMessage();
                 }
             }
 
-            function startNewChat() {
+            function clearMessages() {
                 document.getElementById('chat-container').innerHTML = '';
-                document.getElementById('chat-title').textContent = 'Новый диалог';
-                currentChatMessages = [];
+            }
+
+            function createNewChat() {
+                clearMessages();
+            }
+
+            function deleteChat(element) {
+                element.parentElement.remove();
             }
 
             async function sendMessage() {
@@ -213,71 +251,48 @@ async def get_chat_ui():
                 const text = input.value.trim();
                 if (!text) return;
 
-                const model = document.getElementById('model-select').value;
                 const chat = document.getElementById('chat-container');
 
                 // Сообщение пользователя
-                chat.innerHTML += `<div class="message user">${escapeHtml(text)}</div>`;
+                const userRow = document.createElement('div');
+                userRow.className = 'msg-row user-row';
+                userRow.innerHTML = `<div class="msg-user">${escapeHtml(text)}</div>`;
+                chat.appendChild(userRow);
+                
                 input.value = '';
                 chat.scrollTop = chat.scrollHeight;
 
-                // Индикатор ответа
+                // Блок ответа бота
+                const botRow = document.createElement('div');
+                botRow.className = 'msg-row bot-row';
                 const botMsg = document.createElement('div');
-                botMsg.className = 'message bot';
+                botMsg.className = 'msg-bot';
                 botMsg.textContent = 'Думаю...';
-                chat.appendChild(botMsg);
+                botRow.appendChild(botMsg);
+                chat.appendChild(botRow);
                 chat.scrollTop = chat.scrollHeight;
 
                 try {
                     const res = await fetch('/api/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ prompt: text, model: model })
+                        body: JSON.stringify({ prompt: text })
                     });
                     
                     const data = await res.json();
-                    
+
                     if (res.ok) {
                         botMsg.textContent = data.response;
-                        
-                        // Если это первое сообщение — создаем заголовок
-                        if (currentChatMessages.length === 0) {
-                            generateChatTitle(text);
-                        }
-                        currentChatMessages.push({ user: text, bot: data.response });
                     } else {
-                        botMsg.className = 'message bot error';
-                        botMsg.textContent = data.detail || 'Произошла ошибка сервера';
+                        botMsg.className = 'msg-bot msg-error';
+                        botMsg.textContent = data.detail || 'Произошла ошибка при обработке запроса.';
                     }
                 } catch (e) {
-                    botMsg.className = 'message bot error';
+                    botMsg.className = 'msg-bot msg-error';
                     botMsg.textContent = 'Ошибка подключения к серверу.';
                 }
-                
-                chat.scrollTop = chat.scrollHeight;
-            }
 
-            async function generateChatTitle(firstMessage) {
-                try {
-                    const res = await fetch('/api/generate-title', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: firstMessage })
-                    });
-                    const data = await res.json();
-                    if (data.title) {
-                        document.getElementById('chat-title').textContent = data.title;
-                        
-                        // Добавляем в историю слева
-                        const historyList = document.getElementById('history-list');
-                        const item = document.createElement('div');
-                        item.className = 'history-item';
-                        item.textContent = data.title;
-                        historyList.prepend(item);
-                    }
-                } catch (e) {
-                    console.error(e);
-                }
+                chat.scrollTop = chat.scrollHeight;
             }
 
             function escapeHtml(text) {
