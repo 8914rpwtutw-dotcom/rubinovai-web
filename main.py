@@ -114,7 +114,6 @@ async def get_chat_ui():
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-        <!-- Подключение библиотеки для обработки Markdown (выделения, отступы, списки) -->
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
         <style>
             :root {
@@ -134,6 +133,29 @@ async def get_chat_ui():
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
             html, body { height: 100%; height: 100dvh; overflow: hidden; background: var(--bg-main); color: var(--text-main); }
             body { display: flex; position: relative; }
+
+            /* Кастомный красивый скроллбар (Chrome, Safari, Edge) */
+            ::-webkit-scrollbar {
+                width: 6px;
+                height: 6px;
+            }
+            ::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            ::-webkit-scrollbar-thumb {
+                background: rgba(99, 102, 241, 0.35);
+                border-radius: 10px;
+                transition: background 0.2s ease;
+            }
+            ::-webkit-scrollbar-thumb:hover {
+                background: rgba(99, 102, 241, 0.65);
+            }
+
+            /* Кастомный скроллбар для Firefox */
+            * {
+                scrollbar-width: thin;
+                scrollbar-color: rgba(99, 102, 241, 0.35) transparent;
+            }
 
             /* Overlay for Mobile Sidebar */
             #sidebar-overlay {
@@ -329,7 +351,7 @@ async def get_chat_ui():
                 box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
             }
 
-            /* Красивое оформление Markdown для сообщений ИИ */
+            /* Оформление Markdown */
             .msg-bot p { margin-bottom: 12px; }
             .msg-bot p:last-child { margin-bottom: 0; }
             .msg-bot strong { color: #ffffff; font-weight: 700; }
@@ -575,7 +597,6 @@ async def get_chat_ui():
                     botMsg.className = 'msg-bot';
 
                     if (res.ok) {
-                        // Рендерим Markdown в чистый HTML через библиотеку marked
                         botMsg.innerHTML = marked.parse(data.response);
                     } else {
                         botMsg.className = 'msg-bot msg-error';
