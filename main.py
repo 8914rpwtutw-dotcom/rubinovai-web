@@ -27,7 +27,7 @@ MODELS_PRIORITY = [
 current_key_index = 0
 
 def get_api_keys():
-    """Собираем ключи динамически при каждом запросе"""
+    """Собираем все доступные ключи из переменных окружения"""
     keys = [
         os.getenv("GEMINI_KEY_1"),
         os.getenv("GEMINI_KEY_2"),
@@ -37,7 +37,7 @@ def get_api_keys():
     return [k.strip() for k in keys if k and k.strip()]
 
 def get_gemini_response(prompt: str) -> str:
-    """Генерация ответа с ротацией ключей и моделей"""
+    """Генерация ответа с ротацией 2 ключей и моделей"""
     global current_key_index
     
     api_keys = get_api_keys()
@@ -45,7 +45,7 @@ def get_gemini_response(prompt: str) -> str:
     if not api_keys:
         raise HTTPException(
             status_code=500, 
-            detail="API-ключи не найдены. Перейдите в настройки Render -> Environment и добавьте переменную GEMINI_KEY_1 или GEMINI_API_KEY."
+            detail="API-ключи не найдены. Укажите GEMINI_KEY_1 и GEMINI_KEY_2 в Environment Variables на Render."
         )
         
     total_keys = len(api_keys)
@@ -55,7 +55,6 @@ def get_gemini_response(prompt: str) -> str:
         active_key = api_keys[current_key_index % total_keys]
         
         try:
-            # Явно передаем ключ в клиент
             client = genai.Client(api_key=active_key)
             
             for model_name in MODELS_PRIORITY:
@@ -78,13 +77,14 @@ def get_gemini_response(prompt: str) -> str:
         except Exception as e:
             print(f"[Client Init Error] Ошибка инициализации клиента: {e}")
 
-        # Переключаем ключ
+        # Переключаем на следующий ключ
+        print(f"[Gemini] Переключаем с ключа #{current_key_index + 1}...")
         current_key_index = (current_key_index + 1) % total_keys
         keys_tried += 1
 
     raise HTTPException(
         status_code=429, 
-        detail="Все API-ключи и модели исчерпали лимиты. Попробуйте позже."
+        detail="Оба API-ключа исчерпали лимиты. Попробуйте позже."
     )
 
 # ------------------------------------------------------------------
