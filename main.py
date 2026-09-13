@@ -24,7 +24,10 @@ app.add_middleware(
 )
 
 client = genai.Client()
+
+# Основная модель и список резервных для обхода ошибки 503
 CHAT_MODEL = "gemini-3.1-flash-lite"
+FALLBACK_MODELS = [CHAT_MODEL, "gemini-2.5-flash", "gemini-1.5-flash"]
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
@@ -98,11 +101,6 @@ async def chat_endpoint(
                 )
             )
 
-        chat = client.chats.create(
-            model=CHAT_MODEL,
-            history=formatted_history
-        )
-
         current_contents = []
         if file:
             file_bytes = await file.read()
@@ -112,11 +110,37 @@ async def chat_endpoint(
                     mime_type=file.content_type
                 )
             )
-        
         current_contents.append(message)
-        response = chat.send_message(current_contents)
 
-        return {"response": response.text}
+        # Автоматический обход ошибки 503 (UNAVAILABLE / High Demand)
+        response_text = None
+        last_error = None
+
+        for model_name in FALLBACK_MODELS:
+            for attempt in range(3):
+                try:
+                    chat = client.chats.create(
+                        model=model_name,
+                        history=formatted_history
+                    )
+                    response = chat.send_message(current_contents)
+                    response_text = response.text
+                    break
+                except Exception as e:
+                    last_error = e
+                    err_str = str(e)
+                    if "503" in err_str or "UNAVAILABLE" in err_str or "high demand" in err_str:
+                        time.sleep(1.5 * (attempt + 1))
+                        continue
+                    else:
+                        raise e
+            if response_text:
+                break
+
+        if not response_text:
+            raise last_error if last_error else HTTPException(status_code=503, detail="Серверы Google временно перегружены. Попробуйте еще раз.")
+
+        return {"response": response_text}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
