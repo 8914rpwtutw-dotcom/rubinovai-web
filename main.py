@@ -4,34 +4,17 @@ import json
 import uuid
 import io
 import base64
-import urllib.request
-import urllib.parse
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
 
 app = FastAPI()
 
-# Уникальный ID текущей сборки (меняется при каждом перезапуске сервера)
 SERVER_BUILD_ID = str(uuid.uuid4())[:8]
 IMAGE_GEN_ENABLED = True
-
-# Данные текущего деплоя Render.
-# Render передаёт их автоматически для Git-репозитория.
-CURRENT_COMMIT = os.environ.get("RENDER_GIT_COMMIT", "")
-CURRENT_BRANCH = os.environ.get("RENDER_GIT_BRANCH", "")
-CURRENT_REPO_SLUG = os.environ.get("RENDER_GIT_REPO_SLUG", "")
-
-# Небольшой кэш, чтобы не обращаться к GitHub API слишком часто.
-DEPLOY_STATUS_CACHE = {
-    "checked_at": 0.0,
-    "latest_commit": None,
-    "error": None,
-}
-DEPLOY_STATUS_CACHE_TTL = 4.0
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,7 +24,7 @@ app.add_middleware(
 )
 
 client = genai.Client()
-CHAT_MODEL = "gemini-2.5-flash" # Используем актуальную модель
+CHAT_MODEL = "gemini-3.1-flash-lite"
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
@@ -49,82 +32,6 @@ class TitleRequest(BaseModel):
 
 class ImageGenRequest(BaseModel):
     prompt: str
-
-def get_latest_github_commit():
-    """
-    Возвращает HEAD-коммит ветки из GitHub.
-    На Render это позволяет старой версии приложения заметить,
-    что в GitHub уже появился новый коммит и начался deploy.
-    """
-    now = time.time()
-
-    if (
-        DEPLOY_STATUS_CACHE["latest_commit"] is not None
-        and now - DEPLOY_STATUS_CACHE["checked_at"] < DEPLOY_STATUS_CACHE_TTL
-    ):
-        return DEPLOY_STATUS_CACHE["latest_commit"], DEPLOY_STATUS_CACHE["error"]
-
-    if not CURRENT_REPO_SLUG or not CURRENT_BRANCH:
-        DEPLOY_STATUS_CACHE["checked_at"] = now
-        DEPLOY_STATUS_CACHE["latest_commit"] = None
-        DEPLOY_STATUS_CACHE["error"] = "Render Git metadata is unavailable"
-        return None, DEPLOY_STATUS_CACHE["error"]
-
-    branch = urllib.parse.quote(CURRENT_BRANCH, safe="")
-    url = f"https://api.github.com/repos/{CURRENT_REPO_SLUG}/commits/{branch}"
-
-    try:
-        request = urllib.request.Request(
-            url,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "Rubinov-AI-Deploy-Monitor",
-            },
-        )
-
-        with urllib.request.urlopen(request, timeout=3) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-
-        latest_commit = payload.get("sha")
-
-        DEPLOY_STATUS_CACHE["checked_at"] = now
-        DEPLOY_STATUS_CACHE["latest_commit"] = latest_commit
-        DEPLOY_STATUS_CACHE["error"] = None
-        return latest_commit, None
-
-    except Exception as exc:
-        DEPLOY_STATUS_CACHE["checked_at"] = now
-        DEPLOY_STATUS_CACHE["error"] = str(exc)
-        return DEPLOY_STATUS_CACHE["latest_commit"], str(exc)
-
-
-@app.get("/api/deploy-status")
-async def deploy_status():
-    """
-    Состояние обновления:
-    - updating=True, если GitHub уже указывает на более новый commit,
-      чем тот, на котором сейчас работает Render.
-    - updating=False и commit отличается, когда новая версия уже запущена.
-    """
-    latest_commit, error = get_latest_github_commit()
-
-    is_building = bool(
-        CURRENT_COMMIT
-        and latest_commit
-        and latest_commit != CURRENT_COMMIT
-    )
-
-    return {
-        "updating": is_building,
-        "current_commit": CURRENT_COMMIT,
-        "latest_commit": latest_commit,
-        "current_branch": CURRENT_BRANCH,
-        "repository": CURRENT_REPO_SLUG,
-        "build_id": SERVER_BUILD_ID,
-        "github_check_ok": latest_commit is not None,
-        "error": error,
-    }
-
 
 @app.get("/api/health")
 async def health_check():
@@ -219,182 +126,133 @@ async def chat_endpoint(
 
 @app.get("/", response_class=HTMLResponse)
 async def get_chat_ui():
-    html_content = f"""
+    html_content = """
     <!DOCTYPE html>
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-        <meta http-equiv="Pragma" content="no-cache">
-        <meta http-equiv="Expires" content="0">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>Rubinov-AI Assistant</title>
         <style>
-            * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-            body {{ background: #000000; color: #b5b5b5; display: flex; height: 100dvh; overflow: hidden; position: relative; }}
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+            body { background: #050505; color: #c0c0c0; display: flex; height: 100dvh; overflow: hidden; position: relative; }
             
-            .deploy-overlay {{
-                position: fixed;
-                inset: 0;
-                background: rgba(0,0,0,0.78);
-                backdrop-filter: blur(6px);
-                -webkit-backdrop-filter: blur(6px);
-                display: none;
-                align-items: center;
-                justify-content: center;
-                z-index: 9999;
-                padding: 20px;
-            }}
+            /* Sidebar */
+            .sidebar { width: 300px; background: #0a0a0a; display: flex; flex-direction: column; border-right: 1px solid #1f1f1f; padding: 16px; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 100; }
+            .logo-area { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; }
+            .logo-title { font-size: 1.15rem; font-weight: 700; color: #e0e0e0; letter-spacing: 0.5px; }
+            .logo-subtitle { font-size: 0.7rem; color: #707070; font-weight: 600; margin-top: 2px; letter-spacing: 1px; }
+            .close-sidebar-btn { display: none; background: transparent; border: none; color: #aaa; font-size: 1.4rem; cursor: pointer; padding: 4px; }
 
-            .deploy-overlay.active {{ display: flex; }}
-
-            .deploy-card {{
-                width: min(420px, 100%);
-                background: #0b0b0b;
-                border: 1px solid #2a2a2a;
-                border-radius: 20px;
-                padding: 28px;
-                text-align: center;
-                box-shadow: 0 20px 60px rgba(0,0,0,0.55);
-            }}
-
-            .deploy-spinner {{
-                width: 34px;
-                height: 34px;
-                margin: 0 auto 16px;
-                border: 3px solid #2b2b2b;
-                border-top-color: #ffffff;
-                border-radius: 50%;
-                animation: deploySpin 0.9s linear infinite;
-            }}
-
-            @keyframes deploySpin {{
-                to {{ transform: rotate(360deg); }}
-            }}
-
-            .deploy-title {{
-                color: #f1f1f1;
-                font-size: 1rem;
-                font-weight: 700;
-                margin-bottom: 8px;
-            }}
-
-            .deploy-text {{
-                color: #777;
-                font-size: 0.83rem;
-                line-height: 1.5;
-            }}
-
-            .deploy-hint {{
-                color: #4f4f4f;
-                font-size: 0.72rem;
-                margin-top: 12px;
-            }}
-
-            .sidebar {{ width: 280px; background: #080808; display: flex; flex-direction: column; border-right: 1px solid #1a1a1a; padding: 16px; transition: transform 0.3s ease; z-index: 100; }}
-            .logo-area {{ margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; padding: 0 8px; }}
-            .logo-title {{ font-size: 1.1rem; font-weight: bold; color: #cccccc; }}
-            .logo-subtitle {{ font-size: 0.75rem; color: #666666; font-weight: 600; margin-top: 4px; }}
-            .close-sidebar-btn {{ display: none; background: transparent; border: none; color: #888; font-size: 1.2rem; cursor: pointer; }}
-
-            .new-chat-btn {{ 
-                background: transparent; color: #d0d0d0; border: 1px solid #222; padding: 10px 14px; 
-                border-radius: 20px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 16px; 
-                display: flex; align-items: center; gap: 8px; transition: background 0.2s; 
-            }}
-            .new-chat-btn:hover {{ background: #181818; color: #fff; border-color: #333; }}
+            .new-chat-btn { 
+                background: #141414; color: #e0e0e0; border: 1px solid #2a2a2a; padding: 12px 16px; 
+                border-radius: 14px; font-weight: 600; cursor: pointer; text-align: left; margin-bottom: 20px; 
+                display: flex; align-items: center; gap: 10px; transition: all 0.2s; font-size: 0.9rem;
+            }
+            .new-chat-btn:hover { background: #1c1c1c; border-color: #404040; color: #fff; }
             
-            .chats-section-title {{ font-size: 0.75rem; text-transform: uppercase; color: #595959; margin-bottom: 8px; font-weight: bold; padding: 0 8px; }}
-            .chats-list {{ flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }}
+            .chats-section-title { font-size: 0.7rem; text-transform: uppercase; color: #666; margin-bottom: 8px; font-weight: 700; padding: 0 8px; letter-spacing: 0.8px; }
+            .chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; padding-right: 4px; }
+            .chats-list::-webkit-scrollbar { width: 4px; }
+            .chats-list::-webkit-scrollbar-thumb { background: #222; border-radius: 4px; }
             
-            .chat-item {{ 
-                display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; 
-                border-radius: 20px; cursor: pointer; background: transparent; color: #8c8c8c; font-size: 0.9rem; 
+            .chat-item { 
+                display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; 
+                border-radius: 12px; cursor: pointer; background: transparent; color: #999; font-size: 0.9rem; 
                 border: 1px solid transparent; transition: all 0.2s;
-            }}
-            .chat-item:hover {{ background: #141414; color: #b5b5b5; }}
-            .chat-item.active {{ background: #1c1c1c; color: #e0e0e0; font-weight: 500; border: 1px solid #282828; }}
-            .chat-title-text {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }}
-            .delete-chat-btn {{ background: transparent; border: none; color: #595959; font-size: 1rem; cursor: pointer; padding: 2px 6px; border-radius: 50%; }}
-            .delete-chat-btn:hover {{ color: #fff; background: rgba(255,255,255,0.08); }}
+            }
+            .chat-item:hover { background: #121212; color: #ccc; }
+            .chat-item.active { background: #1a1a1a; color: #f0f0f0; font-weight: 500; border-color: #2e2e2e; }
+            .chat-title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+            .delete-chat-btn { background: transparent; border: none; color: #666; font-size: 1.1rem; cursor: pointer; padding: 4px 8px; border-radius: 6px; opacity: 0; transition: opacity 0.2s; }
+            .chat-item:hover .delete-chat-btn { opacity: 1; }
+            .delete-chat-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
 
-            .sidebar-footer {{ padding: 8px; border-top: 1px solid #1a1a1a; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #595959; }}
-            .status-dot {{ width: 8px; height: 8px; background: #22c55e; border-radius: 50%; }}
+            .sidebar-footer { padding: 12px 8px; border-top: 1px solid #1f1f1f; display: flex; align-items: center; gap: 10px; font-size: 0.8rem; color: #666; }
+            .status-dot { width: 7px; height: 7px; background: #22c55e; border-radius: 50%; box-shadow: 0 0 8px rgba(34, 197, 94, 0.4); }
 
-            .main-content {{ flex: 1; display: flex; flex-direction: column; background: #000; width: 100%; overflow: hidden; }}
-            .top-nav {{ padding: 16px 20px; border-bottom: 1px solid #1a1a1a; display: flex; justify-content: space-between; align-items: center; background: #080808; }}
-            .top-left-group {{ display: flex; align-items: center; gap: 12px; }}
-            .menu-btn {{ display: none; background: #121212; border: 1px solid #222; color: #b5b5b5; padding: 6px 10px; border-radius: 6px; cursor: pointer; }}
-            .top-title-wrapper {{ display: flex; flex-direction: column; gap: 2px; }}
-            .top-title {{ font-weight: 600; font-size: 0.95rem; color: #b5b5b5; }}
-            .model-badge {{ font-size: 0.7rem; color: #777; background: #121212; border: 1px solid #222; padding: 2px 8px; border-radius: 10px; width: fit-content; font-weight: 500; }}
+            /* Main Area */
+            .main-content { flex: 1; display: flex; flex-direction: column; background: #050505; width: 100%; overflow: hidden; position: relative; }
+            .top-nav { padding: 14px 20px; border-bottom: 1px solid #1f1f1f; display: flex; justify-content: space-between; align-items: center; background: #080808; min-height: 65px; }
+            .top-left-group { display: flex; align-items: center; gap: 14px; }
+            .menu-btn { display: none; background: #141414; border: 1px solid #2a2a2a; color: #ccc; width: 38px; height: 38px; border-radius: 10px; cursor: pointer; align-items: center; justify-content: center; font-size: 1.1rem; }
+            .top-title-wrapper { display: flex; flex-direction: column; gap: 3px; }
+            .top-title { font-weight: 600; font-size: 0.95rem; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+            .model-badge { font-size: 0.68rem; color: #888; background: #121212; border: 1px solid #222; padding: 2px 8px; border-radius: 8px; width: fit-content; font-weight: 500; }
             
-            .mode-switch {{ display: flex; background: #121212; border: 1px solid #222; border-radius: 16px; padding: 2px; }}
-            .mode-btn {{ background: transparent; border: none; color: #777; padding: 6px 12px; border-radius: 14px; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }}
-            .mode-btn.active {{ background: #262626; color: #fff; }}
+            .nav-right-group { display: flex; align-items: center; gap: 10px; }
+            .mode-switch { display: flex; background: #121212; border: 1px solid #222; border-radius: 12px; padding: 3px; }
+            .mode-btn { background: transparent; border: none; color: #888; padding: 6px 12px; border-radius: 9px; font-size: 0.78rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+            .mode-btn.active { background: #262626; color: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
 
-            .ai-status-badge {{ font-size: 0.7rem; background: rgba(255,255,255,0.03); color: #a6a6a6; padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); display: none; align-items: center; gap: 6px; font-weight: 600; }}
-            .ai-status-badge.active {{ display: inline-flex; animation: pulseBadge 1.5s infinite; }}
-            @keyframes pulseBadge {{ 0% {{ opacity: 0.5; }} 50% {{ opacity: 1; border-color: #888; }} 100% {{ opacity: 0.5; }} }}
+            .ai-status-badge { font-size: 0.68rem; background: rgba(255,255,255,0.04); color: #bbb; padding: 5px 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); display: none; align-items: center; gap: 6px; font-weight: 600; }
+            .ai-status-badge.active { display: inline-flex; animation: pulseBadge 1.5s infinite; }
+            @keyframes pulseBadge { 0% { opacity: 0.6; } 50% { opacity: 1; border-color: #666; } 100% { opacity: 0.6; } }
 
-            .clear-btn {{ background: #121212; color: #8c8c8c; border: 1px solid #222; padding: 6px 12px; border-radius: 16px; cursor: pointer; font-size: 0.8rem; }}
-            .clear-btn:hover {{ background: #1c1c1c; color: #fff; }}
+            .clear-btn { background: #141414; color: #999; border: 1px solid #2a2a2a; padding: 7px 14px; border-radius: 12px; cursor: pointer; font-size: 0.78rem; font-weight: 500; transition: all 0.2s; }
+            .clear-btn:hover { background: #1f1f1f; color: #fff; border-color: #404040; }
 
-            .chat-messages {{ flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; }}
+            /* Chat Messages */
+            .chat-messages { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; scroll-behavior: smooth; }
+            .chat-messages::-webkit-scrollbar { width: 6px; }
+            .chat-messages::-webkit-scrollbar-thumb { background: #222; border-radius: 4px; }
             
-            .welcome-container {{ display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 480px; width: 100%; text-align: center; }}
-            .welcome-card {{ background: #080808; border: 1px solid #1a1a1a; border-radius: 16px; padding: 18px 20px; width: 100%; }}
-            .welcome-title {{ font-weight: 600; font-size: 0.95rem; color: #cccccc; margin-bottom: 4px; }}
-            .welcome-subtitle {{ font-size: 0.8rem; color: #595959; }}
+            .welcome-container { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; max-width: 520px; width: 100%; margin: auto; text-align: center; padding: 20px; }
+            .welcome-card { background: #0c0c0c; border: 1px solid #1a1a1a; border-radius: 20px; padding: 24px; width: 100%; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+            .welcome-title { font-weight: 600; font-size: 1.1rem; color: #e0e0e0; margin-bottom: 6px; }
+            .welcome-subtitle { font-size: 0.85rem; color: #777; line-height: 1.4; }
 
-            .chips-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }}
-            .chip {{ background: #0a0a0a; border: 1px solid #1c1c1c; border-radius: 16px; padding: 10px 14px; color: #8c8c8c; font-size: 0.82rem; cursor: pointer; text-align: left; transition: all 0.2s; display: flex; align-items: center; gap: 8px; }}
-            .chip:hover {{ background: #161616; border-color: #333; color: #ccc; }}
+            .chips-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
+            .chip { background: #0a0a0a; border: 1px solid #1f1f1f; border-radius: 14px; padding: 12px 14px; color: #999; font-size: 0.83rem; cursor: pointer; text-align: left; transition: all 0.2s; display: flex; align-items: center; gap: 8px; }
+            .chip:hover { background: #161616; border-color: #333; color: #ddd; transform: translateY(-1px); }
 
-            .message {{ padding: 12px 16px; border-radius: 14px; max-width: 85%; line-height: 1.5; overflow-wrap: break-word; white-space: pre-wrap; font-size: 0.95rem; align-self: flex-start; }}
-            .message.user {{ background: #242424 !important; color: #e0e0e0 !important; align-self: flex-end; border: 1px solid #333; }}
-            .message.ai {{ background: #0e0e0e; color: #b5b5b5; border: 1px solid #222; }}
-            .message img {{ max-width: 100%; border-radius: 10px; margin-top: 8px; display: block; }}
+            .message { padding: 14px 18px; border-radius: 16px; max-width: 80%; line-height: 1.6; overflow-wrap: break-word; white-space: pre-wrap; font-size: 0.93rem; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+            .message.user { background: #222222 !important; color: #f0f0f0 !important; align-self: flex-end; border: 1px solid #333; border-bottom-right-radius: 4px; }
+            .message.ai { background: #0c0c0c; color: #c5c5c5; border: 1px solid #1f1f1f; align-self: flex-start; border-bottom-left-radius: 4px; }
+            .message img { max-width: 100%; border-radius: 12px; margin-top: 10px; display: block; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
             
-            .file-preview-pill {{ display: inline-flex; align-items: center; gap: 6px; background: #181818; border: 1px solid #333; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; color: #ccc; margin-bottom: 8px; width: fit-content; }}
-            .file-preview-pill button {{ background: none; border: none; color: #888; cursor: pointer; font-weight: bold; font-size: 1rem; }}
-
-            .input-container {{ padding: 16px 20px; background: #000; }}
-            .input-box {{ background: #080808; border: 1px solid #1a1a1a; border-radius: 20px; display: flex; flex-direction: column; padding: 10px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }}
-            .input-row {{ display: flex; align-items: center; gap: 10px; width: 100%; }}
+            /* Input Area */
+            .input-container { padding: 16px 24px 24px; background: #050505; }
+            .input-box { background: #0c0c0c; border: 1px solid #222; border-radius: 20px; display: flex; flex-direction: column; padding: 10px 14px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); transition: border-color 0.2s; }
+            .input-box:focus-within { border-color: #444; }
+            .input-row { display: flex; align-items: flex-end; gap: 10px; width: 100%; }
             
-            textarea {{ flex: 1; background: transparent; border: none; color: #b5b5b5; font-size: 0.95rem; resize: none; outline: none; max-height: 120px; padding: 4px 0; }}
-            textarea::placeholder {{ color: #4a4a4a; }}
+            textarea { flex: 1; background: transparent; border: none; color: #e0e0e0; font-size: 0.95rem; resize: none; outline: none; max-height: 140px; padding: 6px 0; line-height: 1.4; }
+            textarea::placeholder { color: #555; }
 
-            .attach-btn {{ background: #141414; border: 1px solid #222; color: #aaa; min-width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }}
-            .attach-btn:hover {{ background: #222; color: #fff; border-color: #444; }}
+            .attach-btn { background: #141414; border: 1px solid #2a2a2a; color: #bbb; min-width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; flex-shrink: 0; margin-bottom: 2px; }
+            .attach-btn:hover { background: #222; color: #fff; border-color: #444; }
             
-            .send-btn {{ background: #262626; color: #d0d0d0; border: 1px solid #333; padding: 8px 16px; border-radius: 16px; font-weight: bold; cursor: pointer; font-size: 0.9rem; flex-shrink: 0; }}
-            .send-btn:hover {{ background: #333; color: #fff; }}
-            .send-btn:disabled {{ background: #161616; color: #444; cursor: not-allowed; }}
+            .send-btn { background: #e0e0e0; color: #000; border: none; padding: 9px 18px; border-radius: 14px; font-weight: 700; cursor: pointer; font-size: 0.88rem; flex-shrink: 0; transition: all 0.2s; margin-bottom: 2px; }
+            .send-btn:hover { background: #fff; box-shadow: 0 0 12px rgba(255,255,255,0.2); }
+            .send-btn:disabled { background: #1a1a1a; color: #555; cursor: not-allowed; box-shadow: none; }
 
-            @media (max-width: 768px) {{
-                .sidebar {{ position: absolute; height: 100%; left: 0; top: 0; transform: translateX(-100%); }}
-                .sidebar.open {{ transform: translateX(0); }}
-                .close-sidebar-btn {{ display: block; }}
-                .menu-btn {{ display: inline-flex; }}
-                .chips-grid {{ grid-template-columns: 1fr; }}
-            }}
+            .file-preview-pill { display: inline-flex; align-items: center; gap: 8px; background: #161616; border: 1px solid #333; padding: 6px 12px; border-radius: 10px; font-size: 0.78rem; color: #ddd; margin-bottom: 8px; width: fit-content; }
+            .file-preview-pill button { background: none; border: none; color: #888; cursor: pointer; font-weight: bold; font-size: 1.1rem; line-height: 1; }
+            .file-preview-pill button:hover { color: #fff; }
+
+            /* Overlay for mobile sidebar */
+            .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(3px); z-index: 90; }
+            .sidebar-overlay.active { display: block; }
+
+            /* Mobile Adaptation */
+            @media (max-width: 768px) {
+                .sidebar { position: absolute; height: 100%; left: 0; top: 0; transform: translateX(-100%); width: 280px; box-shadow: 20px 0 40px rgba(0,0,0,0.8); }
+                .sidebar.open { transform: translateX(0); }
+                .close-sidebar-btn { display: block; }
+                .menu-btn { display: inline-flex; }
+                .chips-grid { grid-template-columns: 1fr; }
+                .chat-messages { padding: 16px; }
+                .input-container { padding: 12px 16px 16px; }
+                .message { max-width: 90%; }
+                .top-title { max-width: 140px; }
+                .clear-btn { padding: 6px 10px; font-size: 0.72rem; }
+                .mode-btn { padding: 5px 8px; font-size: 0.72rem; }
+            }
         </style>
     </head>
     <body>
-        <div id="deployOverlay" class="deploy-overlay" aria-live="polite">
-            <div class="deploy-card">
-                <div class="deploy-spinner"></div>
-                <div class="deploy-title">Сайт обновляется</div>
-                <div class="deploy-text" id="deployOverlayText">
-                    Новая версия уже собирается на Render. Пожалуйста, не закрывайте страницу.
-                </div>
-                <div class="deploy-hint">
-                    После завершения сайт обновится автоматически.
-                </div>
-            </div>
-        </div>
+        <div id="sidebarOverlay" class="sidebar-overlay" onclick="toggleSidebar()"></div>
 
         <div id="sidebar" class="sidebar">
             <div class="logo-area">
@@ -406,10 +264,10 @@ async def get_chat_ui():
             </div>
             
             <button class="new-chat-btn" onclick="startNewChat()">
-                <span>+</span> Новый чат
+                <span style="font-size: 1.1rem; line-height: 1;">+</span> Новый чат
             </button>
             
-            <div class="chats-section-title">История чатов</div>
+            <div class="chats-section-title">История диалогов</div>
             <div id="chatsList" class="chats-list"></div>
             
             <div class="sidebar-footer">
@@ -424,17 +282,17 @@ async def get_chat_ui():
                     <button class="menu-btn" onclick="toggleSidebar()">☰</button>
                     <div class="top-title-wrapper">
                         <div class="top-title" id="currentChatTitle">Новый диалог</div>
-                        <div class="model-badge">⚡ gemini-2.5-flash</div>
+                        <div class="model-badge">⚡ gemini-3.1-flash-lite</div>
                     </div>
                 </div>
-                <div style="display: flex; align-items: center; gap: 10px;">
+                <div class="nav-right-group">
                     <div class="mode-switch">
                         <button id="modeChat" class="mode-btn active" onclick="setMode('chat')">💬 Чат</button>
                         <button id="modeImage" class="mode-btn" onclick="setMode('image')">🎨 Картинка</button>
                     </div>
                     <div id="aiStatusBadge" class="ai-status-badge">
-                        <span style="width: 6px; height: 6px; background: #fff; border-radius: 50%;"></span>
-                        ОБРАБОТКА...
+                        <span style="width: 5px; height: 5px; background: #fff; border-radius: 50%;"></span>
+                        ДУМАЕТ...
                     </div>
                     <button class="clear-btn" onclick="clearCurrentChat()">Очистить</button>
                 </div>
@@ -444,7 +302,7 @@ async def get_chat_ui():
                 <div class="welcome-container" id="welcomeContainer">
                     <div class="welcome-card">
                         <div class="welcome-title">Чем я могу помочь сегодня?</div>
-                        <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключитесь в режим создания картинок.</div>
+                        <div class="welcome-subtitle">Задайте вопрос, прикрепите файл или переключитесь в режим генерации изображений.</div>
                     </div>
                     <div class="chips-grid">
                         <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
@@ -471,153 +329,71 @@ async def get_chat_ui():
         </div>
 
         <script>
-            // Фиксируем версию страницы, с которой пользователь сейчас работает.
-            const CURRENT_DEPLOY_COMMIT = "{CURRENT_COMMIT}";
-
-            let deployUpdatingShown = false;
-            let deployReloadScheduled = false;
-
-            function setDeployOverlay(active, text = null) {{
-                const overlay = document.getElementById('deployOverlay');
-                if (!overlay) return;
-
-                overlay.classList.toggle('active', active);
-
-                if (text) {{
-                    document.getElementById('deployOverlayText').innerText = text;
-                }}
-            }}
-
-            function hardReloadAfterDeploy() {{
-                if (deployReloadScheduled) return;
-                deployReloadScheduled = true;
-
-                const url = new URL(window.location.href);
-                url.searchParams.set('_updated', Date.now().toString());
-
-                console.log("Новая версия Render запущена. Выполняю жёсткое обновление страницы...");
-                window.location.replace(url.toString());
-            }}
-
-            async function checkDeployStatus() {{
-                try {{
-                    const res = await fetch('/api/deploy-status?t=' + Date.now(), {{
-                        cache: 'no-store',
-                        headers: {{ 'Cache-Control': 'no-cache' }}
-                    }});
-
-                    if (!res.ok) return;
-
-                    const data = await res.json();
-
-                    // В GitHub появился новый commit, а текущий Render-инстанс
-                    // ещё работает на старом: значит идёт сборка/деплой.
-                    if (data.updating) {{
-                        if (!deployUpdatingShown) {{
-                            deployUpdatingShown = true;
-                            setDeployOverlay(
-                                true,
-                                'Новая версия уже отправлена в GitHub и сейчас собирается на Render.'
-                            );
-                        }}
-                        return;
-                    }}
-
-                    // Если новая версия уже запущена, endpoint будет возвращать
-                    // новый current_commit, отличный от commit старой страницы.
-                    const newVersionStarted =
-                        CURRENT_DEPLOY_COMMIT &&
-                        data.current_commit &&
-                        data.current_commit !== CURRENT_DEPLOY_COMMIT;
-
-                    // Перезагружаем только когда действительно запущен
-                    // новый Git commit. Случайный SERVER_BUILD_ID здесь
-                    // намеренно НЕ используется: при нескольких инстансах
-                    // Render он может отличаться без нового деплоя.
-                    if (newVersionStarted) {{
-                        setDeployOverlay(
-                            true,
-                            'Сборка завершена. Перезапускаю сайт и загружаю новую версию...'
-                        );
-
-                        // Небольшая пауза позволяет Render полностью переключить трафик
-                        // на новый экземпляр перед повторной загрузкой страницы.
-                        setTimeout(hardReloadAfterDeploy, 350);
-                    }}
-                }} catch (e) {{
-                    // Во время переключения Render API может кратковременно
-                    // быть недоступно — следующая проверка продолжит мониторинг.
-                }}
-            }}
-
-            // Первый запуск сразу и затем каждые 4 секунды.
-            checkDeployStatus();
-            setInterval(checkDeployStatus, 4000);
-
             let chats = JSON.parse(localStorage.getItem('rubinov_chats') || '[]');
             let currentChatId = localStorage.getItem('rubinov_current_id') || null;
             let selectedFile = null;
             let currentMode = 'chat';
 
-            function setMode(mode) {{
+            function setMode(mode) {
                 currentMode = mode;
                 document.getElementById('modeChat').classList.toggle('active', mode === 'chat');
                 document.getElementById('modeImage').classList.toggle('active', mode === 'image');
                 const textarea = document.getElementById('userInput');
-                textarea.placeholder = mode === 'image' ? 'Опишите картинку для генерации...' : 'Введите сообщение...';
-            }}
+                textarea.placeholder = mode === 'image' ? 'Опишите изображение для генерации...' : 'Введите сообщение...';
+            }
 
-            window.addEventListener('DOMContentLoaded', () => {{
+            window.addEventListener('DOMContentLoaded', () => {
                 renderChatsList();
-                if (currentChatId) {{
+                if (currentChatId) {
                     loadChat(currentChatId);
-                }}
-            }});
+                }
+            });
 
-            function toggleSidebar() {{
+            function toggleSidebar() {
                 document.getElementById('sidebar').classList.toggle('open');
-            }}
+                document.getElementById('sidebarOverlay').classList.toggle('active');
+            }
 
-            function autoResize(textarea) {{
+            function autoResize(textarea) {
                 textarea.style.height = 'auto';
-                textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
-            }}
+                textarea.style.height = Math.min(textarea.scrollHeight, 140) + 'px';
+            }
 
-            function handleKeyDown(e) {{
-                if (e.key === 'Enter' && !e.shiftKey) {{
+            function handleKeyDown(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     sendMessage();
-                }}
-            }}
+                }
+            }
 
-            function handleFileSelect(e) {{
+            function handleFileSelect(e) {
                 const file = e.target.files[0];
                 if (!file) return;
                 selectedFile = file;
                 const previewArea = document.getElementById('filePreviewArea');
                 previewArea.innerHTML = `
                     <div class="file-preview-pill">
-                        <span>📎 ${{file.name}}</span>
+                        <span>📎 ${file.name}</span>
                         <button onclick="removeFile()">×</button>
                     </div>
                 `;
-            }}
+            }
 
-            function removeFile() {{
+            function removeFile() {
                 selectedFile = null;
                 document.getElementById('fileInput').value = '';
                 document.getElementById('filePreviewArea').innerHTML = '';
-            }}
+            }
 
-            function sendPreset(text) {{
+            function sendPreset(text) {
                 document.getElementById('userInput').value = text;
-                if (text.includes('Нарисовать')) {{
+                if (text.includes('Нарисовать')) {
                     setMode('image');
-                }}
+                }
                 sendMessage();
-            }}
+            }
 
-            function startNewChat() {{
+            function startNewChat() {
                 currentChatId = null;
                 localStorage.removeItem('rubinov_current_id');
                 document.getElementById('currentChatTitle').innerText = 'Новый диалог';
@@ -625,7 +401,7 @@ async def get_chat_ui():
                     <div class="welcome-container" id="welcomeContainer">
                         <div class="welcome-card">
                             <div class="welcome-title">Чем я могу помочь сегодня?</div>
-                            <div class="welcome-subtitle">Задайте вопрос, загрузите файл или переключитесь в режим создания картинок.</div>
+                            <div class="welcome-subtitle">Задайте вопрос, прикрепите файл или переключитесь в режим генерации изображений.</div>
                         </div>
                         <div class="chips-grid">
                             <div class="chip" onclick="sendPreset('Напиши простой код на Python для сервера FastAPI')">⚡ Код FastAPI</div>
@@ -637,38 +413,38 @@ async def get_chat_ui():
                 `;
                 renderChatsList();
                 if (window.innerWidth <= 768) toggleSidebar();
-            }}
+            }
 
-            function clearCurrentChat() {{
+            function clearCurrentChat() {
                 startNewChat();
-            }}
+            }
 
-            function renderChatsList() {{
+            function renderChatsList() {
                 const list = document.getElementById('chatsList');
                 list.innerHTML = '';
-                chats.forEach(chat => {{
+                chats.forEach(chat => {
                     const div = document.createElement('div');
-                    div.className = `chat-item ${{chat.id === currentChatId ? 'active' : ''}}`;
+                    div.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
                     div.innerHTML = `
-                        <span class="chat-title-text" onclick="loadChat('${{chat.id}}')">${{chat.title}}</span>
-                        <button class="delete-chat-btn" onclick="deleteChat(event, '${{chat.id}}')">×</button>
+                        <span class="chat-title-text" onclick="loadChat('${chat.id}')">${chat.title}</span>
+                        <button class="delete-chat-btn" onclick="deleteChat(event, '${chat.id}')">×</button>
                     `;
                     list.appendChild(div);
-                }});
-            }}
+                });
+            }
 
-            function deleteChat(e, id) {{
+            function deleteChat(e, id) {
                 e.stopPropagation();
                 chats = chats.filter(c => c.id !== id);
                 localStorage.setItem('rubinov_chats', JSON.stringify(chats));
-                if (currentChatId === id) {{
+                if (currentChatId === id) {
                     startNewChat();
-                }} else {{
+                } else {
                     renderChatsList();
-                }}
-            }}
+                }
+            }
 
-            function loadChat(id) {{
+            function loadChat(id) {
                 const chat = chats.find(c => c.id === id);
                 if (!chat) return;
                 currentChatId = id;
@@ -677,18 +453,18 @@ async def get_chat_ui():
                 
                 const container = document.getElementById('chatMessages');
                 container.innerHTML = '';
-                chat.messages.forEach(m => {{
+                chat.messages.forEach(m => {
                     const msgDiv = document.createElement('div');
-                    msgDiv.className = `message ${{m.role}}`;
+                    msgDiv.className = `message ${m.role}`;
                     msgDiv.innerHTML = m.content;
                     container.appendChild(msgDiv);
-                }});
+                });
                 container.scrollTop = container.scrollHeight;
                 renderChatsList();
                 if (window.innerWidth <= 768) toggleSidebar();
-            }}
+            }
 
-            async function sendMessage() {{
+            async function sendMessage() {
                 const input = document.getElementById('userInput');
                 const text = input.value.trim();
                 if (!text && !selectedFile) return;
@@ -701,9 +477,9 @@ async def get_chat_ui():
                 const userMsgDiv = document.createElement('div');
                 userMsgDiv.className = 'message user';
                 let displayContent = text;
-                if (selectedFile) {{
-                    displayContent = `[Файл: ${{selectedFile.name}}]<br>` + displayContent;
-                }}
+                if (selectedFile) {
+                    displayContent = `[Файл: ${selectedFile.name}]<br>` + displayContent;
+                }
                 userMsgDiv.innerHTML = displayContent;
                 container.appendChild(userMsgDiv);
 
@@ -716,111 +492,107 @@ async def get_chat_ui():
                 document.getElementById('sendBtn').disabled = true;
                 container.scrollTop = container.scrollHeight;
 
-                try {{
+                try {
                     let responseHtml = '';
 
-                    if (currentMode === 'image') {{
-                        const imgRes = await fetch('/api/generate-image', {{
+                    if (currentMode === 'image') {
+                        const imgRes = await fetch('/api/generate-image', {
                             method: 'POST',
-                            headers: {{'Content-Type': 'application/json'}},
-                            body: JSON.stringify({{ prompt: text }})
-                        }});
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ prompt: text })
+                        });
                         const imgData = await imgRes.json();
                         if (!imgRes.ok) throw new Error(imgData.detail || 'Ошибка генерации картинки');
-                        responseHtml = `Сгенерированное изображение по запросу: "${{text}}"<br><img src="${{imgData.image_url}}" alt="Generated Image">`;
-                    }} else {{
+                        responseHtml = `Сгенерированное изображение по запросу: "${text}"<br><img src="${imgData.image_url}" alt="Generated Image">`;
+                    } else {
                         let currentHistory = [];
-                        if (currentChatId) {{
+                        if (currentChatId) {
                             const activeChat = chats.find(c => c.id === currentChatId);
-                            if (activeChat) {{
-                                currentHistory = activeChat.messages.map(m => ({{
+                            if (activeChat) {
+                                currentHistory = activeChat.messages.map(m => ({
                                     role: m.role,
                                     content: m.content
-                                }}));
-                            }}
-                        }}
+                                }));
+                            }
+                        }
 
                         const formData = new FormData();
                         formData.append('message', text);
                         formData.append('history', JSON.stringify(currentHistory));
-                        if (fileToSend) {{
+                        if (fileToSend) {
                             formData.append('file', fileToSend);
-                        }}
+                        }
 
-                        const res = await fetch('/api/chat', {{
+                        const res = await fetch('/api/chat', {
                             method: 'POST',
                             body: formData
-                        }});
+                        });
                         const data = await res.json();
                         if (!res.ok) throw new Error(data.detail || 'Ошибка сервера');
                         responseHtml = data.response;
-                    }}
+                    }
 
                     const aiMsgDiv = document.createElement('div');
                     aiMsgDiv.className = 'message ai';
                     aiMsgDiv.innerHTML = responseHtml;
                     container.appendChild(aiMsgDiv);
 
-                    if (!currentChatId) {{
+                    if (!currentChatId) {
                         currentChatId = 'chat_' + Date.now();
                         localStorage.setItem('rubinov_current_id', currentChatId);
                         
                         let chatTitle = text.slice(0, 25) + '...';
-                        if (currentMode === 'chat') {{
-                            try {{
-                                const titleRes = await fetch('/api/title', {{
+                        if (currentMode === 'chat') {
+                            try {
+                                const titleRes = await fetch('/api/title', {
                                     method: 'POST',
-                                    headers: {{'Content-Type': 'application/json'}},
-                                    body: JSON.stringify({{ message: text }})
-                                }});
+                                    headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify({ message: text })
+                                });
                                 const titleData = await titleRes.json();
                                 if (titleData.title) chatTitle = titleData.title;
-                            }} catch(err) {{}}
-                        }} else {{
+                            } catch(err) {}
+                        } else {
                             chatTitle = '🎨 ' + text.slice(0, 20) + '...';
-                        }}
+                        }
 
                         document.getElementById('currentChatTitle').innerText = chatTitle;
                         
-                        chats.unshift({{
+                        chats.unshift({
                             id: currentChatId,
                             title: chatTitle,
                             messages: [
-                                {{ role: 'user', content: displayContent }},
-                                {{ role: 'ai', content: responseHtml }}
+                                { role: 'user', content: displayContent },
+                                { role: 'ai', content: responseHtml }
                             ]
-                        }});
-                    }} else {{
+                        });
+                    } else {
                         const chat = chats.find(c => c.id === currentChatId);
-                        if (chat) {{
-                            chat.messages.push({{ role: 'user', content: displayContent }});
-                            chat.messages.push({{ role: 'ai', content: responseHtml }});
-                        }}
-                    }}
+                        if (chat) {
+                            chat.messages.push({ role: 'user', content: displayContent });
+                            chat.messages.push({ role: 'ai', content: responseHtml });
+                        }
+                    }
                     localStorage.setItem('rubinov_chats', JSON.stringify(chats));
                     renderChatsList();
 
-                }} catch (err) {{
+                } catch (err) {
                     const errDiv = document.createElement('div');
                     errDiv.className = 'message ai';
                     errDiv.style.color = '#ef4444';
                     errDiv.innerText = 'Ошибка: ' + err.message;
                     container.appendChild(errDiv);
-                }} finally {{
+                } finally {
                     document.getElementById('aiStatusBadge').classList.remove('active');
                     document.getElementById('sendBtn').disabled = false;
                     container.scrollTop = container.scrollHeight;
-                }}
-            }}
+                }
+            }
         </script>
     </body>
     </html>
     """
-    return HTMLResponse(content=html_content, headers={
-        "Cache-Control": "no-cache, no-store, max-age=0, must-revalidate",
-        "Pragma": "no-cache",
-        "Expires": "0"
-    })
+    return HTMLResponse(content=html_content)
 
 if __name__ == "__main__":
     import uvicorn
