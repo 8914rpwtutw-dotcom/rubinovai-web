@@ -175,36 +175,25 @@ async def get_chat_ui():
             html, body { height: 100%; height: 100dvh; overflow: hidden; background: var(--bg-main); color: var(--text-main); }
             body { display: flex; position: relative; }
 
-            /* Кастомный овальный тёмный скроллбар */
-            ::-webkit-scrollbar {
-                width: 7px;
-                height: 7px;
-            }
-            ::-webkit-scrollbar-track {
-                background: transparent;
-            }
+            ::-webkit-scrollbar { width: 7px; height: 7px; }
+            ::-webkit-scrollbar-track { background: transparent; }
             ::-webkit-scrollbar-thumb {
                 background: var(--scrollbar-thumb);
                 border-radius: 20px;
                 border: 1px solid rgba(255, 255, 255, 0.05);
             }
-            ::-webkit-scrollbar-thumb:hover {
-                background: #000000;
-            }
+            ::-webkit-scrollbar-thumb:hover { background: #000000; }
 
             * {
                 scrollbar-width: thin;
                 scrollbar-color: var(--scrollbar-thumb) transparent;
             }
 
-            /* Overlay Mobile Sidebar */
             #sidebar-overlay {
                 display: none;
                 position: fixed;
-                top: 0;
-                left: 0;
-                width: 100vw;
-                height: 100dvh;
+                top: 0; left: 0;
+                width: 100vw; height: 100dvh;
                 background: rgba(0, 0, 0, 0.6);
                 backdrop-filter: blur(4px);
                 z-index: 40;
@@ -213,7 +202,6 @@ async def get_chat_ui():
             }
             #sidebar-overlay.active { display: block; opacity: 1; }
 
-            /* Sidebar */
             #sidebar { 
                 width: 280px; 
                 background: var(--bg-sidebar); 
@@ -226,13 +214,15 @@ async def get_chat_ui():
                 height: 100dvh;
             }
             .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; padding: 0 4px; }
+            
+            /* Стили логотипа вместо буквы R */
             .brand-logo { 
-                width: 32px; height: 32px; 
-                background: linear-gradient(135deg, #6366f1, #a855f7); 
-                border-radius: 10px; display: flex; align-items: center; justify-content: center; 
-                font-weight: 700; font-size: 16px; color: #fff;
-                box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+                width: 36px; height: 36px; 
+                border-radius: 10px;
+                object-fit: contain;
+                filter: drop-shadow(0 2px 8px rgba(239, 68, 68, 0.3));
             }
+            
             .brand h2 { font-size: 15px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; }
             .brand span { font-size: 11px; color: var(--text-muted); font-weight: 500; display: block; }
 
@@ -264,7 +254,6 @@ async def get_chat_ui():
             .sidebar-footer { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border-color); }
             .status-dot { width: 8px; height: 8px; background: #10b981; border-radius: 50%; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
 
-            /* Main Area */
             #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100dvh; overflow: hidden; }
             
             #chat-header { 
@@ -278,7 +267,6 @@ async def get_chat_ui():
             .menu-toggle { display: none; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); color: #ffffff; border-radius: 8px; padding: 8px; cursor: pointer; align-items: center; justify-content: center; }
             #chat-header h3 { font-size: 15px; font-weight: 600; color: #ffffff; }
 
-            /* Chat Container */
             #chat-container { 
                 flex: 1; overflow-y: auto; padding: 20px 20px 120px 20px; 
                 display: flex; flex-direction: column; gap: 20px; 
@@ -286,7 +274,7 @@ async def get_chat_ui():
                 position: relative;
             }
 
-            /* Welcome Screen */
+            /* Welcome Screen c крупным логотипом */
             .welcome-screen {
                 position: absolute;
                 top: 40%;
@@ -303,27 +291,14 @@ async def get_chat_ui():
                 gap: 12px;
             }
             .welcome-avatar {
-                width: 56px; height: 56px;
-                background: linear-gradient(135deg, #6366f1, #a855f7);
-                border-radius: 16px;
-                display: flex; align-items: center; justify-content: center;
-                font-weight: 700; font-size: 26px; color: #fff;
-                box-shadow: 0 8px 24px rgba(99, 102, 241, 0.35);
+                width: 72px; height: 72px;
+                object-fit: contain;
+                filter: drop-shadow(0 4px 16px rgba(239, 68, 68, 0.4));
                 margin-bottom: 4px;
             }
-            .welcome-screen h1 {
-                font-size: 22px;
-                font-weight: 700;
-                color: #ffffff;
-                letter-spacing: -0.3px;
-            }
-            .welcome-screen p {
-                font-size: 14px;
-                color: var(--text-muted);
-                line-height: 1.5;
-            }
+            .welcome-screen h1 { font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; }
+            .welcome-screen p { font-size: 14px; color: var(--text-muted); line-height: 1.5; }
             
-            /* Messages */
             .msg-row { display: flex; width: 100%; animation: fadeIn 0.25s ease-out; z-index: 2; }
             .msg-row.user-row { justify-content: flex-end; }
             .msg-row.bot-row { justify-content: flex-start; }
@@ -353,7 +328,6 @@ async def get_chat_ui():
             
             .file-preview-tag { display: inline-flex; align-items: center; gap: 6px; background: rgba(255, 255, 255, 0.1); padding: 4px 8px; border-radius: 6px; font-size: 12px; margin-bottom: 6px; }
 
-            /* Input Area */
             #input-wrapper {
                 position: absolute; bottom: 0; left: 0; right: 0; 
                 padding: 12px 16px; padding-bottom: calc(12px + env(safe-area-inset-bottom));
@@ -396,7 +370,8 @@ async def get_chat_ui():
 
         <div id="sidebar">
             <div class="brand">
-                <div class="brand-logo">R</div>
+                <!-- Заменили R на изображение логотипа -->
+                <img src="/logo.png" alt="Logo" class="brand-logo" />
                 <div>
                     <h2>Rubinov AI</h2>
                     <span>Next-Gen Assistant</span>
@@ -439,9 +414,10 @@ async def get_chat_ui():
                         <button onclick="removeSelectedFile()">✕</button>
                     </div>
                     <div class="input-row">
-                        <input type="file" id="file-input" style="display: none;" onchange="handleFileSelect(event)" />
-                        <button id="file-btn" onclick="document.getElementById('file-input').click()" title="Прикрепить файл">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+                        <!-- Вызов камеры на мобильных устройствах через capture="environment" -->
+                        <input type="file" id="file-input" accept="image/*" capture="environment" style="display: none;" onchange="handleFileSelect(event)" />
+                        <button id="file-btn" onclick="document.getElementById('file-input').click()" title="Сделать фото или прикрепить файл">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                         </button>
                         <input type="text" id="prompt-input" placeholder="Спросите или попросите нарисовать..." onkeydown="handleKeyPress(event)" />
                         <button class="btn-send" onclick="sendMessage()">Отправить</button>
@@ -544,7 +520,7 @@ async def get_chat_ui():
                     const welcome = document.createElement('div');
                     welcome.className = 'welcome-screen';
                     welcome.innerHTML = `
-                        <div class="welcome-avatar">R</div>
+                        <img src="/logo.png" alt="Rubinov AI Logo" class="welcome-avatar" />
                         <h1>Привет! Я Rubinov AI</h1>
                         <p>Чем я могу помочь тебе сегодня? Могу ответить на вопросы, обработать файлы или нарисовать картинку.</p>
                     `;
@@ -562,7 +538,7 @@ async def get_chat_ui():
                     if (msg.role === 'user') {
                         let content = '';
                         if (msg.file) {
-                            content += `<div class="file-preview-tag">📁 ${escapeHtml(msg.file)}</div><br>`;
+                            content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
                         }
                         content += escapeHtml(msg.text);
                         box.innerHTML = content;
@@ -580,7 +556,7 @@ async def get_chat_ui():
                 const file = event.target.files[0];
                 if (file) {
                     selectedFile = file;
-                    document.getElementById('file-name-text').textContent = `📁 ${file.name}`;
+                    document.getElementById('file-name-text').textContent = `📷 ${file.name}`;
                     document.getElementById('file-info-bar').style.display = 'flex';
                 }
             }
@@ -615,7 +591,6 @@ async def get_chat_ui():
                     activeChat.name = text.slice(0, 20) + (text.length > 20 ? '...' : '');
                 }
                 
-                // Перерисовываем интерфейс сразу для отображения сообщения и скрытия приветствия
                 renderMessages(activeChat.messages);
 
                 const formData = new FormData();
@@ -627,7 +602,6 @@ async def get_chat_ui():
                 input.value = '';
                 removeSelectedFile();
 
-                // Показываем индикатор загрузки
                 const chatContainer = document.getElementById('chat-container');
                 const botRow = document.createElement('div');
                 botRow.className = 'msg-row bot-row';
