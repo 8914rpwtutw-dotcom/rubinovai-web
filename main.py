@@ -24,7 +24,7 @@ app.add_middleware(
 )
 
 client = genai.Client()
-CHAT_MODEL = "gemini-3.1-flash-lite"  # Установлена актуальная модель Gemini 3.1 Flash-Lite
+CHAT_MODEL = "gemini-3.1-flash-lite"
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 class TitleRequest(BaseModel):
@@ -416,6 +416,10 @@ async def get_chat_ui():
             function renderChatsList() {
                 const list = document.getElementById('chatsList');
                 list.innerHTML = '';
+                if (chats.length === 0) {
+                    list.innerHTML = '<div style="font-size: 0.8rem; color: #555; padding: 4px 8px;">Нет сохраненных чатов</div>';
+                    return;
+                }
                 chats.forEach(chat => {
                     const div = document.createElement('div');
                     div.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
