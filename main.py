@@ -12,50 +12,36 @@ from bot import bot, dp
 
 app = FastAPI()
 
-# Считываем 3 ключа из Environment Variables на Render
 GEMINI_KEYS = [
     os.getenv("GEMINI_KEY_1"),
     os.getenv("GEMINI_KEY_2"),
     os.getenv("GEMINI_KEY_3")
 ]
-
-# Фильтруем список, оставляя только запряженные ключи
 GEMINI_KEYS = [k for k in GEMINI_KEYS if k]
 
-# Функция для запроса к Gemini с ротацией ключей
 def generate_gemini_response(prompt: str) -> str:
     if not GEMINI_KEYS:
         raise HTTPException(status_code=500, detail="Ключи Gemini не найдены в Environment Variables")
 
-    # Перемешиваем ключи для равномерной нагрузки
     keys_to_try = GEMINI_KEYS.copy()
     random.shuffle(keys_to_try)
-
     last_error = "Не удалось получить ответ от Gemini API."
 
     for key in keys_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}"
         headers = {"Content-Type": "application/json"}
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }
-
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 return data["candidates"][0]["content"]["parts"][0]["text"]
             else:
-                last_error = f"Ошибка API ({response.status_code}): {response.text}"
-                print(f"[Gemini Log] Ключ выдал ошибку {response.status_code}, пробуем следующий...")
+                last_error = f"Ошибка API ({response.status_code})"
         except Exception as e:
             last_error = f"Ошибка подключения: {str(e)}"
-            print(f"[Gemini Log] Сбой запроса, пробуем следующий...")
 
-    raise HTTPException(status_code=500, detail=f"Все ключи Gemini недоступны. {last_error}")
-
+    raise HTTPException(status_code=500, detail=f"Все ключи заняты. {last_error}")
 
 @app.on_event("startup")
 async def startup_event():
@@ -72,34 +58,23 @@ class PromptRequest(BaseModel):
 async def verify_code(data: CodeVerifyRequest):
     async with AsyncSessionLocal() as session:
         stmt = select(AuthCode).where(AuthCode.code == data.code.strip())
-        res = await session.execute(stmt)
-        auth = res.scalars().first()
-
+        auth = (await session.execute(stmt)).scalars().first()
         if not auth:
             raise HTTPException(status_code=400, detail="Неверный или истекший код")
 
-        user_stmt = select(User).where(User.telegram_id == auth.telegram_id)
-        user = (await session.execute(user_stmt)).scalars().first()
-
+        user = (await session.execute(select(User).where(User.telegram_id == auth.telegram_id))).scalars().first()
         if user and user.is_banned:
             raise HTTPException(status_code=403, detail=f"Аккаунт заблокирован: {user.ban_reason}")
 
         await session.delete(auth)
         await session.commit()
-
-        return {
-            "status": "ok",
-            "telegram_id": auth.telegram_id,
-            "is_vip": user.is_vip if user else False
-        }
+        return {"status": "ok", "telegram_id": auth.telegram_id, "is_vip": user.is_vip if user else False}
 
 @app.post("/api/generate")
 async def generate_ai(data: PromptRequest):
     if not data.prompt.strip():
-        raise HTTPException(status_code=400, detail="Запрос не может быть пустым")
-
-    answer = generate_gemini_response(data.prompt)
-    return {"response": answer}
+        raise HTTPException(status_code=400, detail="Запрос пустой")
+    return {"response": generate_gemini_response(data.prompt)}
 
 @app.get("/", response_class=HTMLResponse)
 async def get_chat_ui():
@@ -110,67 +85,74 @@ async def get_chat_ui():
         <meta charset="UTF-8">
         <title>Rubinov AI</title>
         <style>
-            body { background: #0f0f12; color: #fff; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .card { background: #18181c; padding: 30px; border-radius: 12px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.5); width: 340px; }
-            input, textarea { width: 90%; padding: 10px; margin: 10px 0; border-radius: 6px; border: 1px solid #333; background: #222; color: #fff; font-size: 14px; }
-            button { background: #0088cc; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; width: 100%; margin-top: 10px; }
-            a { color: #0088cc; text-decoration: none; display: block; margin-top: 15px; font-size: 14px; }
-            #chat-box { display: none; }
-            .response-area { background: #222; padding: 10px; border-radius: 6px; text-align: left; max-height: 150px; overflow-y: auto; margin-top: 10px; font-size: 13px; white-space: pre-wrap; }
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body { background: #0b0c10; color: #c5c6c7; font-family: sans-serif; display: flex; height: 100vh; overflow: hidden; }
+            #auth-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0b0c10; display: flex; justify-content: center; align-items: center; z-index: 1000; }
+            .auth-card { background: #1f2833; padding: 40px; border-radius: 16px; border: 1px solid #45a29e; text-align: center; width: 360px; box-shadow: 0 0 20px rgba(102,252,241,0.2); }
+            .auth-card h2 { color: #66fcf1; margin-bottom: 10px; }
+            .auth-card input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #45a29e; background: #0b0c10; color: #66fcf1; text-align: center; font-size: 20px; margin-bottom: 20px; outline: none; }
+            .auth-card button { width: 100%; padding: 12px; border-radius: 8px; border: none; background: #66fcf1; color: #0b0c10; font-weight: bold; cursor: pointer; }
+            .auth-card a { color: #66fcf1; display: inline-block; margin-top: 15px; font-size: 13px; text-decoration: none; }
+            .sidebar { width: 260px; background: #1f2833; padding: 20px; border-right: 1px solid #333; display: flex; flex-direction: column; justify-content: space-between; }
+            .logo { font-size: 22px; font-weight: bold; color: #66fcf1; text-align: center; }
+            .user-info { background: #0b0c10; padding: 15px; border-radius: 10px; border: 1px solid #45a29e; font-size: 13px; }
+            .main-content { flex: 1; display: flex; flex-direction: column; background: #0b0c10; }
+            .chat-header { padding: 20px; background: #1f2833; border-bottom: 1px solid #333; color: #66fcf1; font-weight: bold; }
+            .messages-container { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+            .msg { max-width: 80%; padding: 12px 16px; border-radius: 12px; font-size: 15px; line-height: 1.5; white-space: pre-wrap; }
+            .msg.user { align-self: flex-end; background: #45a29e; color: #0b0c10; font-weight: 500; }
+            .msg.ai { align-self: flex-start; background: #1f2833; color: #c5c6c7; border: 1px solid #333; }
+            .input-area { padding: 20px; background: #1f2833; display: flex; gap: 10px; border-top: 1px solid #333; }
+            .input-area textarea { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #45a29e; background: #0b0c10; color: #fff; resize: none; height: 50px; outline: none; }
+            .input-area button { padding: 0 25px; border-radius: 8px; border: none; background: #66fcf1; color: #0b0c10; font-weight: bold; cursor: pointer; }
         </style>
     </head>
     <body>
-        <div class="card" id="auth-box">
-            <h2>Rubinov AI</h2>
-            <p>Введите 6-значный код из бота</p>
-            <input type="text" id="code" placeholder="123456" maxlength="6">
-            <button onclick="login()">Войти</button>
-            <a href="https://t.me/Rubinov_Ai_bot" target="_blank">Перейти в Telegram бота</a>
+        <div id="auth-overlay">
+            <div class="auth-card">
+                <h2>Rubinov AI</h2>
+                <p>Введите код из Telegram</p>
+                <input type="text" id="code" placeholder="123456" maxlength="6">
+                <button onclick="login()">Войти</button><br>
+                <a href="https://t.me/Rubinov_Ai_bot" target="_blank">Получить код в боте</a>
+            </div>
         </div>
-
-        <div class="card" id="chat-box">
-            <h2>Чат с Rubinov AI</h2>
-            <textarea id="prompt" rows="3" placeholder="Задай вопрос ИИ..."></textarea>
-            <button onclick="sendPrompt()">Отправить</button>
-            <div id="result" class="response-area" style="display:none;"></div>
+        <div class="sidebar">
+            <div class="logo">💎 Rubinov AI</div>
+            <div class="user-info" id="user-info-box">ID: Не авторизован</div>
         </div>
-
+        <div class="main-content">
+            <div class="chat-header">Нейросеть</div>
+            <div class="messages-container" id="messages">
+                <div class="msg ai">Привет! Задай вопрос ниже.</div>
+            </div>
+            <div class="input-area">
+                <textarea id="prompt" placeholder="Спроси о чём угодно..." onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); sendPrompt();}"></textarea>
+                <button onclick="sendPrompt()">Отправить</button>
+            </div>
+        </div>
         <script>
             async function login() {
                 const code = document.getElementById('code').value;
-                const res = await fetch('/api/verify-code', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({code})
-                });
+                const res = await fetch('/api/verify-code', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code}) });
                 const data = await res.json();
                 if(res.ok) {
-                    document.getElementById('auth-box').style.display = 'none';
-                    document.getElementById('chat-box').style.display = 'block';
-                } else {
-                    alert(data.detail || 'Ошибка авторизации');
-                }
+                    document.getElementById('auth-overlay').style.display = 'none';
+                    document.getElementById('user-info-box').innerHTML = `👤 <b>ID:</b> ${data.telegram_id}<br>⭐ <b>Статус:</b> ${data.is_vip ? 'VIP' : 'FREE'}`;
+                } else { alert(data.detail || 'Ошибка'); }
             }
-
             async function sendPrompt() {
-                const prompt = document.getElementById('prompt').value;
-                const resultDiv = document.getElementById('result');
-                if(!prompt) return;
-
-                resultDiv.style.display = 'block';
-                resultDiv.innerText = 'Думаю...';
-
-                const res = await fetch('/api/generate', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({prompt})
-                });
+                const input = document.getElementById('prompt');
+                const text = input.value.trim();
+                if(!text) return;
+                const msgs = document.getElementById('messages');
+                const userMsg = document.createElement('div'); userMsg.className = 'msg user'; userMsg.innerText = text; msgs.appendChild(userMsg);
+                input.value = ''; msgs.scrollTop = msgs.scrollHeight;
+                const aiMsg = document.createElement('div'); aiMsg.className = 'msg ai'; aiMsg.innerText = 'Думаю...'; msgs.appendChild(aiMsg); msgs.scrollTop = msgs.scrollHeight;
+                const res = await fetch('/api/generate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({prompt: text}) });
                 const data = await res.json();
-                if(res.ok) {
-                    resultDiv.innerText = data.response;
-                } else {
-                    resultDiv.innerText = 'Ошибка: ' + (data.detail || 'Не удалось получить ответ');
-                }
+                aiMsg.innerText = res.ok ? data.response : 'Ошибка: ' + (data.detail || 'Сбой');
+                msgs.scrollTop = msgs.scrollHeight;
             }
         </script>
     </body>
