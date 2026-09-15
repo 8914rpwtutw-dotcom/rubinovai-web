@@ -15,7 +15,6 @@ ADMIN_ID = os.getenv("ADMIN_TELEGRAM_ID", "")
 bot = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
 
-# Главное меню с кнопками как на твоем скриншоте
 def get_main_keyboard(is_admin: bool = False):
     keyboard = [
         [KeyboardButton(text="🔑 Получить код"), KeyboardButton(text="🎫 Тикеты")],
@@ -51,7 +50,7 @@ async def btn_get_code(message: types.Message):
         return
 
     code = str(random.randint(100000, 999900))
-    expires_at = time.time() + 300  # 5 минут
+    expires_at = time.time() + 300
     save_auth_code(tg_id, code, expires_at)
     
     await message.answer(
@@ -81,7 +80,6 @@ async def btn_admin_panel(message: types.Message):
         parse_mode="HTML"
     )
 
-# Админ-команды
 @dp.message(Command("ban"))
 async def cmd_ban(message: types.Message):
     if str(message.from_user.id) != str(ADMIN_ID):
@@ -147,7 +145,6 @@ async def cmd_reply(message: types.Message):
     await bot.send_message(int(t_id), f"💬 <b>Ответ поддержки:</b>\n{reply_text}", parse_mode="HTML")
     await message.answer("✅ Ответ отправлен.")
 
-# Обработка обычных текстовых сообщений (тикетов) от пользователей
 @dp.message()
 async def handle_other_messages(message: types.Message):
     if not message.text or message.text.startswith("/"):
