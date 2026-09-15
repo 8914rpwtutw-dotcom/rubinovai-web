@@ -68,11 +68,18 @@ def generate_image_response(prompt: str) -> Optional[str]:
 def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_type: Optional[str] = None) -> str:
     global current_key_idx, current_model_idx
     
+    # ПРИНУДИТЕЛЬНЫЙ ПЕРЕХВАТ: если запрос на генерацию, сразу уходим на Imagen
     lowered = prompt.lower()
-    if any(kw in lowered for kw in ["нарисуй", "сгенерируй картинку", "создай картинку", "нарисуй изображение", "draw", "generate image"]):
-        img_html = generate_image_response(prompt)
+    if "нарисуй" in lowered or "draw" in lowered or "сгенерируй" in lowered:
+        clean_prompt = prompt.replace("Нарисуй:", "").replace("нарисуй", "").replace("сгенерируй", "").strip()
+        if not clean_prompt:
+            clean_prompt = "A beautiful artistic image"
+            
+        img_html = generate_image_response(clean_prompt)
         if img_html:
             return f"Вот ваше сгенерированное изображение:\n\n{img_html}"
+        else:
+            raise HTTPException(status_code=500, detail="Не удалось сгенерировать картинку. Проверьте API-ключи Imagen.")
 
     api_keys = get_api_keys()
     if not api_keys:
