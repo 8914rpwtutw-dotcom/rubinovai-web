@@ -80,43 +80,33 @@ def create_auth_code() -> str:
     expires_at = time.time() + 60  # Жвет ровно 1 минуту
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    # Очищаем старые просроченные коды попутно
     cursor.execute("DELETE FROM auth_codes WHERE expires_at < ?", (time.time(),))
     cursor.execute("INSERT OR REPLACE INTO auth_codes (code, telegram_id, is_used, expires_at) VALUES (?, NULL, 0, ?)", (code, expires_at))
     conn.commit()
     conn.close()
     return code
 
-def bind_code_to_telegram(code: str, telegram_id: int, username: str, first_name: str):
+def activate_code_manual(code: str, telegram_id: int, username: str, first_name: str):
     upsert_user_db(telegram_id, username, first_name)
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    # Проверяем код, не истек ли срок (expires_at > текущего времени)
     cursor.execute("SELECT is_used, expires_at FROM auth_codes WHERE code = ?", (code,))
     row = cursor.fetchone()
     if row:
         is_used, expires_at = row
-        if is_used == 0 and time.time() <= expires_at:
+        if time.time() > expires_at:
+            conn.close()
+            return "expired"
+        if is_used == 0:
             cursor.execute("UPDATE auth_codes SET telegram_id = ?, is_used = 1 WHERE code = ?", (telegram_id, code))
             conn.commit()
             conn.close()
-            return True
+            return "success"
+        else:
+            conn.close()
+            return "already_used"
     conn.close()
-    return False
-
-def check_code_status(code: str):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT telegram_id, is_used, expires_at FROM auth_codes WHERE code = ?", (code,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        telegram_id, is_used, expires_at = row
-        if time.time() > expires_at:
-            return "expired"
-        if is_used == 1 and telegram_id:
-            return telegram_id
-    return "pending"
+    return "not_found"
 
 
 app = FastAPI()
@@ -239,19 +229,28 @@ async def telegram_webhook(req: Request):
             parts = text.split()
             if len(parts) > 1 and parts[1].startswith("auth_"):
                 auth_code = parts[1].replace("auth_", "").strip()
-                success = bind_code_to_telegram(auth_code, user_id, username, first_name)
-                if success:
-                    send_telegram_message(
-                        chat_id, 
-                        f"✅ *Авторизация успешна!*\n\nПривет, *{first_name}*! Вы успешно вошли на сайт Rubinov AI. Можете вернуться во вкладку браузера."
-                    )
+                # Если перешли по глубокой ссылке, тоже активируем
+                res_status = activate_code_manual(auth_code, user_id, username, first_name)
+                if res_status == "success":
+                    send_telegram_message(chat_id, f"✅ *Авторизация успешна!*\n\nПривет, *{first_name}*! Можете вернуться на сайт.")
+                elif res_status == "expired":
+                    send_telegram_message(chat_id, "⚠️ Этот код просрочен (прошла 1 минута). Запросите новый на сайте.")
                 else:
-                    send_telegram_message(chat_id, "⚠️ Этот код авторизации просрочен (жил всего 1 минуту) или уже был использован. Запросите новый на сайте.")
+                    send_telegram_message(chat_id, "⚠️ Код недействителен или уже использован.")
             else:
                 send_telegram_message(
                     chat_id, 
-                    f"Привет, *{first_name}*! 👋\nДобро пожаловать в **Rubinov AI**.\n\nТвой Telegram ID: `{user_id}`"
+                    f"Привет, *{first_name}*! 👋\nЧтобы войти на сайт, запросите код на странице входа, и отправьте его сюда или введите прямо на сайте.\n\nТвой Telegram ID: `{user_id}`"
                 )
+        elif len(text) == 6 and text.isalnum():
+            # Если пользователь написал боту сам код вручную
+            res_status = activate_code_manual(text.upper(), user_id, username, first_name)
+            if res_status == "success":
+                send_telegram_message(chat_id, f"✅ *Код {text.upper()} успешно подтвержден!*\n\nПривет, *{first_name}*! Обновите страницу сайта — вы вошли.")
+            elif res_status == "expired":
+                send_telegram_message(chat_id, "⚠️ Этот код уже просрочен (прошла 1 минута).")
+            else:
+                send_telegram_message(chat_id, "⚠️ Неверный код или он уже был использован.")
         elif text.startswith("/vip "):
             try:
                 target_id = int(text.split()[1])
@@ -291,16 +290,26 @@ async def telegram_webhook(req: Request):
 def api_start_code():
     code = create_auth_code()
     bot_uname = get_bot_username()
-    bot_url = f"https://t.me/{bot_uname}?start=auth_{code}"
+    bot_url = f"https://t.me/{bot_uname}"
     return {"code": code, "bot_url": bot_url}
 
-@app.get("/api/auth/check-code")
-def api_check_code(code: str, response: Response):
-    result = check_code_status(code)
-    if result == "expired":
+@app.post("/api/auth/verify-code")
+def api_verify_code(code: str = Form(...), response: Response = None):
+    code_clean = code.strip().upper()
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT telegram_id, is_used, expires_at FROM auth_codes WHERE code = ?", (code_clean,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return {"status": "not_found"}
+    
+    telegram_id, is_used, expires_at = row
+    if time.time() > expires_at:
         return {"status": "expired"}
-    if result != "pending":
-        telegram_id = result
+    
+    if is_used == 1 and telegram_id:
         user = get_user_db(telegram_id)
         if user and user["is_banned"]:
             return {"status": "banned"}
@@ -308,6 +317,7 @@ def api_check_code(code: str, response: Response):
         resp = Response(content='{"status": "success"}', media_type="application/json")
         resp.set_cookie(key="tg_user_id", value=str(telegram_id), httponly=True, max_age=30*86400)
         return resp
+
     return {"status": "pending"}
 
 @app.get("/api/user/status")
@@ -417,13 +427,18 @@ HTML_TEMPLATE = """
         .vip-badge { background: var(--vip-gradient); color: #fff; font-size: 8px; font-weight: 800; padding: 2px 5px; border-radius: 4px; display: none; }
         body.is-vip .vip-badge { display: inline-block; }
 
-        .auth-box { background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px; padding: 12px; margin-bottom: 14px; text-align: center; display: flex; flex-direction: column; gap: 8px; }
-        .auth-box span { font-size: 11px; color: var(--text-muted); }
+        .auth-box { background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px; padding: 12px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
+        .auth-box span { font-size: 11px; color: var(--text-muted); text-align: center; }
         
         .btn-telegram-auth {
-            background: #229ed9; color: #fff; border: none; padding: 10px 14px; border-radius: 10px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; transition: 0.2s;
+            background: #229ed9; color: #fff; border: none; padding: 8px 12px; border-radius: 10px; font-size: 11.5px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; transition: 0.2s;
         }
         .btn-telegram-auth:hover { background: #1f8ad2; }
+
+        .auth-input-row { display: flex; gap: 6px; margin-top: 4px; }
+        .auth-input { flex: 1; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 8px; color: #fff; padding: 6px 8px; font-size: 12px; text-align: center; text-transform: uppercase; outline: none; }
+        .auth-input:focus { border-color: #a855f7; }
+        .btn-auth-submit { background: var(--accent-gradient); color: #fff; border: none; padding: 6px 12px; border-radius: 8px; font-size: 11.5px; font-weight: 600; cursor: pointer; }
 
         .btn-new-chat { 
             background: var(--accent-gradient); color: #ffffff; border: none; padding: 11px 16px; 
@@ -511,8 +526,13 @@ HTML_TEMPLATE = """
 
         <div id="auth-section" class="auth-box">
             <span>Вход через Telegram (код живет 1 мин):</span>
-            <a href="#" id="tg-auth-link" class="btn-telegram-auth" target="_blank" onclick="startAuthProcess()">🔑 Войти через бота</a>
-            <span id="auth-code-hint" style="font-size: 10px; display:none; color: #a855f7;">Ожидаем подтверждения в боте...</span>
+            <a href="#" id="tg-auth-link" class="btn-telegram-auth" target="_blank">🤖 Открыть бота</a>
+            <div style="font-size: 11px; color: #a855f7; text-align: center;" id="auth-code-display">Нажмите кнопку, получите код в боте</div>
+            <div class="auth-input-row">
+                <input type="text" id="auth-code-input" class="auth-input" placeholder="Код (6 симв)" maxlength="6">
+                <button class="btn-auth-submit" onclick="submitAuthCode()">Ввести</button>
+            </div>
+            <span id="auth-error-hint" style="font-size: 10px; color: #f87171; text-align: center; display:none;"></span>
         </div>
 
         <button class="btn-new-chat" onclick="createNewChat()">+ Новый диалог</button>
@@ -560,7 +580,6 @@ HTML_TEMPLATE = """
         let isGenerating = false;
         let isVip = false;
         let isLogged = false;
-        let authCheckInterval = null;
 
         async function checkUserStatus() {
             try {
@@ -580,43 +599,57 @@ HTML_TEMPLATE = """
                         document.body.classList.add('is-vip');
                         document.getElementById('plan-text').textContent = 'VIP План ⭐';
                     }
-                    if (authCheckInterval) clearInterval(authCheckInterval);
+                } else {
+                    // Автоматически запрашиваем новый код при загрузке, если не авторизован
+                    fetchNewAuthCode();
                 }
             } catch(e) { console.error(e); }
         }
 
-        async function startAuthProcess() {
+        async function fetchNewAuthCode() {
             try {
                 const res = await fetch('/api/auth/start-code');
                 const data = await res.json();
                 document.getElementById('tg-auth-link').href = data.bot_url;
-                document.getElementById('auth-code-hint').style.display = 'block';
-                document.getElementById('auth-code-hint').textContent = `Код активен 60 сек. Перейдите в бота!`;
-                
-                if (authCheckInterval) clearInterval(authCheckInterval);
-                authCheckInterval = setInterval(() => pollAuthCode(data.code), 3000);
-            } catch(e) { alert("Не удалось сгенерировать код входа"); }
+                document.getElementById('auth-code-display').innerHTML = `Ваш код: <b style="color:#fff; font-size:13px; letter-spacing:1px;">${data.code}</b>`;
+            } catch(e) { console.error(e); }
         }
 
-        async function pollAuthCode(code) {
+        async function submitAuthCode() {
+            const codeInput = document.getElementById('auth-code-input');
+            const code = codeInput.value.trim();
+            const hint = document.getElementById('auth-error-hint');
+            hint.style.display = 'none';
+
+            if (!code || code.length !== 6) {
+                hint.textContent = 'Введите 6-значный код';
+                hint.style.display = 'block';
+                return;
+            }
+
             try {
-                const res = await fetch(`/api/auth/check-code?code=${code}`);
+                const formData = new FormData();
+                formData.append('code', code);
+                const res = await fetch('/api/auth/verify-code', { method: 'POST', body: formData });
                 const data = await res.json();
+
                 if (data.status === 'success') {
-                    clearInterval(authCheckInterval);
                     location.reload();
                 } else if (data.status === 'expired') {
-                    clearInterval(authCheckInterval);
-                    document.getElementById('auth-code-hint').textContent = '⚠️ Код истек (прошла 1 минута). Нажмите заново.';
-                    document.getElementById('tg-auth-link').href = '#';
+                    hint.textContent = '⚠️ Код истек (прошла 1 минута). Обновите страницу.';
+                    hint.style.display = 'block';
                 } else if (data.status === 'banned') {
-                    clearInterval(authCheckInterval);
                     document.getElementById('ban-overlay').style.display = 'flex';
+                } else {
+                    hint.textContent = '⚠️ Неверный код или бот еще не подтвердил его.';
+                    hint.style.display = 'block';
                 }
-            } catch(e) {}
+            } catch(e) {
+                hint.textContent = 'Ошибка соединения';
+                hint.style.display = 'block';
+            }
         }
 
-        setInterval(checkUserStatus, 10000);
         checkUserStatus();
 
         if (chats.length === 0) {
@@ -685,7 +718,7 @@ HTML_TEMPLATE = """
         }
 
         function triggerFileButton() {
-            if (!isLogged) { alert("Сначала авторизуйтесь через бота!"); return; }
+            if (!isLogged) { alert("Сначала авторизуйтесь!"); return; }
             if (!isVip) { alert("⭐ Файлы доступны только VIP пользователям!"); return; }
             document.getElementById('file-input').click();
         }
