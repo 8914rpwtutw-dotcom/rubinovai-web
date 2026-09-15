@@ -1,7 +1,6 @@
 import os
 import time
 import uuid
-import base64
 from typing import Optional
 from fastapi import FastAPI, HTTPException, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,48 +37,27 @@ def get_api_keys():
 def get_gemini_client(api_key: str):
     return genai.Client(api_key=api_key)
 
-def generate_image_response(prompt: str) -> Optional[str]:
-    api_keys = get_api_keys()
-    for key in api_keys:
-        try:
-            client = get_gemini_client(key)
-            result = client.models.generate_images(
-                model='imagen-3.0-generate-002',
-                prompt=prompt,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    output_mime_type="image/jpeg",
-                    aspect_ratio="1:1"
-                )
-            )
-            if result.generated_images:
-                img_bytes = result.generated_images[0].image.image_bytes
-                base64_img = base64.b64encode(img_bytes).decode('utf-8')
-                return f'''
-                    <div style="margin-top:8px;">
-                        <img src="data:image/jpeg;base64,{base64_img}" alt="Generated Image" style="max-width:100%; border-radius:12px; display:block; margin-bottom:8px;" />
-                        <a href="data:image/jpeg;base64,{base64_img}" download="rubinov_ai_image.jpg" style="display:inline-block; background:#6366f1; color:#fff; padding:6px 12px; border-radius:8px; font-size:12px; text-decoration:none; font-weight:600;">📥 Скачать картинку</a>
-                    </div>
-                '''
-        except Exception:
-            continue
-    return None
-
 def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_type: Optional[str] = None) -> str:
     global current_key_idx, current_model_idx
     
-    # ПРИНУДИТЕЛЬНЫЙ ПЕРЕХВАТ: если запрос на генерацию, сразу уходим на Imagen
+    # Если пользователь просит нарисовать картинку, генерируем красивую ссылку через бесплатный генератор без ключей Imagen
     lowered = prompt.lower()
     if "нарисуй" in lowered or "draw" in lowered or "сгенерируй" in lowered:
         clean_prompt = prompt.replace("Нарисуй:", "").replace("нарисуй", "").replace("сгенерируй", "").strip()
         if not clean_prompt:
-            clean_prompt = "A beautiful artistic image"
-            
-        img_html = generate_image_response(clean_prompt)
-        if img_html:
-            return f"Вот ваше сгенерированное изображение:\n\n{img_html}"
-        else:
-            raise HTTPException(status_code=500, detail="Не удалось сгенерировать картинку. Проверьте API-ключи Imagen.")
+            clean_prompt = "beautiful sunset landscape"
+        
+        # Кодируем запрос для URL безопасного генератора изображений
+        import urllib.parse
+        encoded_prompt = urllib.parse.quote(clean_prompt)
+        img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+        
+        return f"""Вот ваше сгенерированное изображение по запросу: *"{clean_prompt}"*
+
+<div style="margin-top:10px;">
+    <img src="{img_url}" alt="{clean_prompt}" style="max-width:100%; border-radius:12px; display:block; margin-bottom:8px;" />
+    <a href="{img_url}" target="_blank" download="rubinov_ai.jpg" style="display:inline-block; background:#6366f1; color:#fff; padding:6px 12px; border-radius:8px; font-size:12px; text-decoration:none; font-weight:600;">📥 Скачать картинку в полном размере</a>
+</div>"""
 
     api_keys = get_api_keys()
     if not api_keys:
@@ -446,8 +424,8 @@ async def get_chat_ui():
         </div>
 
         <script>
-            let chats = JSON.parse(localStorage.getItem('rubinov_chats_prod') || '[]');
-            let currentChatId = localStorage.getItem('rubinov_active_chat_prod') || null;
+            let chats = JSON.parse(localStorage.getItem('rubinov_chats_prod_v3') || '[]');
+            let currentChatId = localStorage.getItem('rubinov_active_chat_prod_v3') || null;
             let selectedFile = null;
 
             if (chats.length === 0) {
@@ -460,8 +438,8 @@ async def get_chat_ui():
             }
 
             function saveState() {
-                localStorage.setItem('rubinov_chats_prod', JSON.stringify(chats));
-                localStorage.setItem('rubinov_active_chat_prod', currentChatId);
+                localStorage.setItem('rubinov_chats_prod_v3', JSON.stringify(chats));
+                localStorage.setItem('rubinov_active_chat_prod_v3', currentChatId);
                 renderChats();
             }
 
@@ -552,7 +530,7 @@ async def get_chat_ui():
                             <path d="M42 45 Q46 40 50 45 Q54 40 58 45 Q60 52 50 56 Q40 52 42 45 Z" stroke="#ffffff" stroke-width="2.5" fill="none" />
                         </svg>
                         <h1>Rubinov AI</h1>
-                        <p>Задайте вопрос или попросите сгенерировать изображение.</p>
+                        <p>Задайте вопрос или попросите нарисовать картинку.</p>
                     `;
                     chatContainer.appendChild(welcome);
                     return;
