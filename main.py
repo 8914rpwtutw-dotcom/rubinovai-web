@@ -47,7 +47,6 @@ def api_get_status(telegram_id: str):
 def verify_code(code: str = Form(...)):
     telegram_id = find_user_by_auth_code(code.strip())
     if telegram_id:
-        # Сжигаем код после успешного использования, чтобы нельзя было использовать повторно
         save_auth_code(telegram_id, "", 0)
         return {"status": "success", "telegram_id": telegram_id, "user": check_user_status(telegram_id)}
     raise HTTPException(status_code=400, detail="Неверный код или время его действия истекло (5 минут).")
@@ -118,6 +117,9 @@ async def chat_endpoint(
     file: Optional[UploadFile] = File(None),
     telegram_id: str = Form("demo_user")
 ):
+    if telegram_id == "demo_user":
+        raise HTTPException(status_code=401, detail="Требуется авторизация.")
+
     status = check_user_status(telegram_id)
     if status["is_banned"]:
         raise HTTPException(status_code=403, detail="Вы забанены. Обратитесь в тикет поддержки.")
@@ -165,34 +167,46 @@ HTML_TEMPLATE = """
         html, body { height: 100%; height: 100dvh; overflow: hidden; background: var(--bg-main); color: var(--text-main); }
         body { display: flex; position: relative; }
 
+        /* Экран блокировки (бан) */
         #ban-screen {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
             background: rgba(4, 5, 8, 0.96); backdrop-filter: blur(15px);
-            z-index: 10000; display: none; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 20000; display: none; flex-direction: column; align-items: center; justify-content: center;
             text-align: center; padding: 24px;
         }
         #ban-screen h1 { color: #f87171; font-size: 26px; margin-bottom: 12px; font-weight: 700; }
         #ban-screen p { color: var(--text-muted); font-size: 14.5px; max-width: 420px; line-height: 1.6; }
 
+        /* Плашка обязательной авторизации посередине экрана */
+        #auth-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
+            background: rgba(4, 5, 8, 0.88); backdrop-filter: blur(20px);
+            z-index: 10000; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            padding: 20px;
+        }
+        .auth-modal {
+            background: rgba(15, 18, 26, 0.95); border: 1px solid rgba(168, 85, 247, 0.3);
+            border-radius: 24px; padding: 32px; width: 100%; max-width: 400px;
+            text-align: center; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 30px rgba(168, 85, 247, 0.15);
+            display: flex; flex-direction: column; gap: 16px;
+        }
+        .auth-modal h2 { font-size: 20px; font-weight: 700; color: #fff; }
+        .auth-modal p { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+        .auth-modal input {
+            background: rgba(0, 0, 0, 0.5); border: 1px solid var(--border-color);
+            border-radius: 12px; color: #fff; padding: 12px; font-size: 18px; outline: none;
+            text-align: center; letter-spacing: 4px; font-weight: 700;
+        }
+        .auth-modal button {
+            background: var(--accent-gradient); color: #fff; border: none;
+            border-radius: 12px; padding: 12px; font-size: 14px; font-weight: 600; cursor: pointer;
+            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
+        }
+
         .vip-badge {
             background: var(--vip-gradient); color: #000; font-size: 10px; font-weight: 800;
             padding: 4px 8px; border-radius: 6px; text-transform: uppercase;
             box-shadow: 0 0 15px rgba(245, 158, 11, 0.4); display: inline-block; letter-spacing: 0.5px;
-        }
-
-        .auth-card {
-            background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color);
-            border-radius: 12px; padding: 12px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px;
-        }
-        .auth-card label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
-        .auth-row { display: flex; gap: 6px; }
-        .auth-input {
-            flex: 1; background: rgba(0,0,0,0.4); border: 1px solid var(--border-color);
-            border-radius: 8px; color: #fff; padding: 7px 10px; font-size: 13px; outline: none; text-align: center; letter-spacing: 2px;
-        }
-        .auth-btn {
-            background: var(--accent-gradient); color: #fff; border: none;
-            border-radius: 8px; padding: 7px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
         }
 
         #sidebar { 
@@ -284,9 +298,25 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
+    <!-- Экран блокировки (бан) -->
     <div id="ban-screen">
         <h1>⛔ Вы забанены</h1>
         <p>Доступ к сервису заблокирован администратором. Пожалуйста, напишите в тикет поддержки через Telegram-бота.</p>
+    </div>
+
+    <!-- Модалка обязательного входа (плашка) -->
+    <div id="auth-overlay">
+        <div class="auth-modal">
+            <svg style="width: 44px; height: 44px; margin: 0 auto; filter: drop-shadow(0 0 10px rgba(168, 85, 247, 0.5));" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M50 10 L85 35 L50 90 L15 35 Z" stroke="url(#rubyGrad)" stroke-width="4" fill="none" />
+                <circle cx="50" cy="48" r="14" fill="#ff4b4b" opacity="0.25" />
+                <path d="M42 45 Q46 40 50 45 Q54 40 58 45 Q60 52 50 56 Q40 52 42 45 Z" stroke="#ffffff" stroke-width="2.5" fill="none" />
+            </svg>
+            <h2>Авторизация в Rubinov AI</h2>
+            <p>Чтобы пользоваться нейросетью, откройте нашего Telegram-бота, отправьте команду <b>/login</b> и введите полученный 6-значный код:</p>
+            <input type="text" id="otp-input" placeholder="000000" maxlength="6" />
+            <button onclick="verifyOtpCode()">Войти в систему</button>
+        </div>
     </div>
 
     <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
@@ -308,18 +338,6 @@ HTML_TEMPLATE = """
             <div id="badge-container"></div>
         </div>
 
-        <!-- Авторизация: простой ввод кода из бота -->
-        <div class="auth-card" id="auth-section">
-            <label>Вход через Telegram:</label>
-            <p style="font-size: 10.5px; color: var(--text-muted); margin-bottom: 6px; line-height: 1.4;">
-                Напишите боту <b>/login</b> и введите код:
-            </p>
-            <div class="auth-row">
-                <input type="text" id="otp-input" class="auth-input" placeholder="Код (6 цифр)" maxlength="6" />
-                <button class="auth-btn" onclick="verifyOtpCode()">Войти</button>
-            </div>
-        </div>
-
         <button class="btn-new-chat" onclick="createNewChat()">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
             Новый диалог
@@ -334,9 +352,9 @@ HTML_TEMPLATE = """
         <div class="sidebar-footer">
             <div class="status-dot-wrap">
                 <span class="status-dot"></span>
-                <span id="user-status-text">Гость</span>
+                <span id="user-status-text">Авторизован</span>
             </div>
-            <button class="auth-btn" style="font-size:10px; padding:3px 8px; background:rgba(255,255,255,0.05); color:var(--text-muted);" onclick="logout()">Выйти</button>
+            <button class="auth-btn" style="font-size:10px; padding:3px 8px; background:rgba(255,255,255,0.05); color:var(--text-muted); border-radius:6px; border:none; cursor:pointer;" onclick="logout()">Выйти</button>
         </div>
     </div>
 
@@ -386,7 +404,7 @@ HTML_TEMPLATE = """
         async function verifyOtpCode() {
             const code = document.getElementById('otp-input').value.trim();
             if (!code || code.length < 6) {
-                alert('Введите 6-значный код из бота!');
+                alert('Введите полный 6-значный код!');
                 return;
             }
             try {
@@ -398,8 +416,7 @@ HTML_TEMPLATE = """
                 if (res.ok) {
                     tgId = data.telegram_id;
                     localStorage.setItem('rubinov_current_tg_id', tgId);
-                    alert('Успешный вход!');
-                    document.getElementById('auth-section').style.display = 'none';
+                    document.getElementById('auth-overlay').style.display = 'none';
                     checkStatus();
                     loadChats();
                 } else {
@@ -416,17 +433,26 @@ HTML_TEMPLATE = """
         }
 
         async function checkStatus() {
-            if (tgId === 'demo_user') return;
+            if (tgId === 'demo_user') {
+                document.getElementById('auth-overlay').style.display = 'flex';
+                return;
+            }
             try {
                 const res = await fetch(`/api/user/status?telegram_id=${tgId}`);
+                if (!res.ok) {
+                    document.getElementById('auth-overlay').style.display = 'flex';
+                    return;
+                }
                 const data = await res.json();
                 isBanned = data.is_banned;
                 isVip = data.is_vip;
 
                 if (isBanned) {
                     document.getElementById('ban-screen').style.display = 'flex';
+                    document.getElementById('auth-overlay').style.display = 'none';
                 } else {
                     document.getElementById('ban-screen').style.display = 'none';
+                    document.getElementById('auth-overlay').style.display = 'none';
                 }
 
                 const badgeContainer = document.getElementById('badge-container');
@@ -449,12 +475,17 @@ HTML_TEMPLATE = """
                     statusText.textContent = 'Free Аккаунт';
                 }
                 renderChats();
-            } catch(e) {}
+            } catch(e) {
+                document.getElementById('auth-overlay').style.display = 'flex';
+            }
         }
 
-        if (tgId !== 'demo_user') {
-            document.getElementById('auth-section').style.display = 'none';
+        // Проверяем при загрузке
+        if (tgId === 'demo_user') {
+            document.getElementById('auth-overlay').style.display = 'flex';
+        } else {
             checkStatus();
+            loadChats();
         }
 
         setInterval(checkStatus, 6000);
@@ -463,6 +494,7 @@ HTML_TEMPLATE = """
         let currentChatId = null;
 
         function loadChats() {
+            if (tgId === 'demo_user') return;
             chats = JSON.parse(localStorage.getItem('rubinov_chats_' + tgId) || '[]');
             currentChatId = localStorage.getItem('rubinov_active_' + tgId) || null;
             if (chats.length === 0) {
@@ -474,9 +506,8 @@ HTML_TEMPLATE = """
             renderChats();
         }
 
-        loadChats();
-
         function saveState() {
+            if (tgId === 'demo_user') return;
             localStorage.setItem('rubinov_chats_' + tgId, JSON.stringify(chats));
             localStorage.setItem('rubinov_active_' + tgId, currentChatId);
             renderChats();
@@ -653,6 +684,10 @@ HTML_TEMPLATE = """
         }
 
         function handleActionButton() {
+            if (tgId === 'demo_user') {
+                document.getElementById('auth-overlay').style.display = 'flex';
+                return;
+            }
             if (isGenerating) {
                 if (activeController) activeController.abort();
                 const active = chats.find(c => c.id === currentChatId);
