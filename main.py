@@ -1,9 +1,8 @@
 import os
 import time
 import sqlite3
-import hmac
-import hashlib
-import requests
+import random
+import string
 from typing import Optional
 from fastapi import FastAPI, HTTPException, File, Form, UploadFile, Request, Response, Cookie
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
+import requests
 
 # --- НАСТРОЙКА БАЗЫ ДАННЫХ ---
 DB_NAME = "database.sqlite"
@@ -26,6 +26,14 @@ def init_db():
             is_vip INTEGER DEFAULT 0,
             is_banned INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS auth_codes (
+            code TEXT PRIMARY KEY,
+            telegram_id INTEGER,
+            is_used INTEGER DEFAULT 0,
+            expires_at REAL
         )
     ''')
     conn.commit()
@@ -67,6 +75,49 @@ def set_ban_db(telegram_id: int, status: int):
     conn.commit()
     conn.close()
 
+def create_auth_code() -> str:
+    code = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    expires_at = time.time() + 60  # Жвет ровно 1 минуту
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    # Очищаем старые просроченные коды попутно
+    cursor.execute("DELETE FROM auth_codes WHERE expires_at < ?", (time.time(),))
+    cursor.execute("INSERT OR REPLACE INTO auth_codes (code, telegram_id, is_used, expires_at) VALUES (?, NULL, 0, ?)", (code, expires_at))
+    conn.commit()
+    conn.close()
+    return code
+
+def bind_code_to_telegram(code: str, telegram_id: int, username: str, first_name: str):
+    upsert_user_db(telegram_id, username, first_name)
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    # Проверяем код, не истек ли срок (expires_at > текущего времени)
+    cursor.execute("SELECT is_used, expires_at FROM auth_codes WHERE code = ?", (code,))
+    row = cursor.fetchone()
+    if row:
+        is_used, expires_at = row
+        if is_used == 0 and time.time() <= expires_at:
+            cursor.execute("UPDATE auth_codes SET telegram_id = ?, is_used = 1 WHERE code = ?", (telegram_id, code))
+            conn.commit()
+            conn.close()
+            return True
+    conn.close()
+    return False
+
+def check_code_status(code: str):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT telegram_id, is_used, expires_at FROM auth_codes WHERE code = ?", (code,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        telegram_id, is_used, expires_at = row
+        if time.time() > expires_at:
+            return "expired"
+        if is_used == 1 and telegram_id:
+            return telegram_id
+    return "pending"
+
 
 app = FastAPI()
 
@@ -93,6 +144,9 @@ def get_api_keys():
 def get_bot_token():
     return os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
+def get_bot_username():
+    return os.getenv("TELEGRAM_BOT_USERNAME", "rubinov_ai_bot").strip()
+
 def send_telegram_message(chat_id: int, text: str):
     token = get_bot_token()
     if not token:
@@ -102,32 +156,6 @@ def send_telegram_message(chat_id: int, text: str):
         requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
     except Exception:
         pass
-
-def verify_telegram_auth(query_params: dict) -> Optional[dict]:
-    bot_token = get_bot_token()
-    if not bot_token:
-        return {"id": query_params.get("id"), "first_name": query_params.get("first_name", "User"), "username": query_params.get("username", "")}
-    
-    check_hash = query_params.get("hash")
-    if not check_hash:
-        return None
-    
-    data_check_arr = []
-    for k, v in sorted(query_params.items()):
-        if k != "hash" and v is not None:
-            data_check_arr.append(f"{k}={v}")
-    data_check_string = "\n".join(data_check_arr)
-    
-    secret_key = hashlib.sha256(bot_token.encode()).digest()
-    h = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-    
-    if h == check_hash:
-        return {
-            "id": int(query_params["id"]),
-            "first_name": query_params.get("first_name", ""),
-            "username": query_params.get("username", "")
-        }
-    return None
 
 def get_gemini_client(api_key: str):
     return genai.Client(api_key=api_key)
@@ -154,10 +182,7 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
     api_keys = get_api_keys()
     if not api_keys:
-        raise HTTPException(
-            status_code=500,
-            detail="API-ключи не найдены в Environment Variables."
-        )
+        raise HTTPException(status_code=500, detail="API-ключи не найдены в Environment Variables.")
 
     num_keys = len(api_keys)
     num_models = len(MODELS)
@@ -175,32 +200,22 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
         try:
             client = get_gemini_client(active_key)
-            response = client.models.generate_content(
-                model=active_model,
-                contents=contents
-            )
+            response = client.models.generate_content(model=active_model, contents=contents)
             return response.text
-
         except APIError as e:
-            if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e) or "high demand" in str(e).lower():
+            if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e):
                 current_model_idx += 1
                 if current_model_idx >= num_models:
                     current_model_idx = 0
                     current_key_idx = (current_key_idx + 1) % num_keys
                 time.sleep(0.5)
                 continue
-            elif e.code == 404 or "not found" in str(e).lower():
-                current_model_idx = (current_model_idx + 1) % num_models
-                continue
             else:
                 break
         except Exception:
             break
 
-    raise HTTPException(
-        status_code=500,
-        detail="Сервис ИИ перегружен в данный момент. Повторите попытку через несколько секунд."
-    )
+    raise HTTPException(status_code=500, detail="Сервис ИИ перегружен. Повторите попытку.")
 
 @app.get("/health")
 def health_check():
@@ -221,64 +236,79 @@ async def telegram_webhook(req: Request):
         upsert_user_db(user_id, username, first_name)
 
         if text.startswith("/start"):
-            send_telegram_message(
-                chat_id, 
-                f"Привет, *{first_name}*! 👋\nДобро пожаловать в **Rubinov AI**.\n\nТвой Telegram ID: `{user_id}`\nИспользуй сайт для общения с нейросетью!"
-            )
+            parts = text.split()
+            if len(parts) > 1 and parts[1].startswith("auth_"):
+                auth_code = parts[1].replace("auth_", "").strip()
+                success = bind_code_to_telegram(auth_code, user_id, username, first_name)
+                if success:
+                    send_telegram_message(
+                        chat_id, 
+                        f"✅ *Авторизация успешна!*\n\nПривет, *{first_name}*! Вы успешно вошли на сайт Rubinov AI. Можете вернуться во вкладку браузера."
+                    )
+                else:
+                    send_telegram_message(chat_id, "⚠️ Этот код авторизации просрочен (жил всего 1 минуту) или уже был использован. Запросите новый на сайте.")
+            else:
+                send_telegram_message(
+                    chat_id, 
+                    f"Привет, *{first_name}*! 👋\nДобро пожаловать в **Rubinov AI**.\n\nТвой Telegram ID: `{user_id}`"
+                )
         elif text.startswith("/vip "):
             try:
                 target_id = int(text.split()[1])
                 set_vip_db(target_id, 1)
-                send_telegram_message(chat_id, f"⭐ Пользователю `{target_id}` успешно выдан VIP статус!")
-                send_telegram_message(target_id, "🎉 Поздравляем! Администратор выдал вам **VIP статус** на сайте!")
+                send_telegram_message(chat_id, f"⭐ Пользователю `{target_id}` выдан VIP статус!")
+                send_telegram_message(target_id, "🎉 Поздравляем! Администратор выдал вам **VIP статус**!")
             except Exception:
-                send_telegram_message(chat_id, "Ошибка. Использование: `/vip ID`")
+                send_telegram_message(chat_id, "Использование: `/vip ID`")
         elif text.startswith("/unvip "):
             try:
                 target_id = int(text.split()[1])
                 set_vip_db(target_id, 0)
-                send_telegram_message(chat_id, f"🔒 У пользователя `{target_id}` снят VIP статус.")
-                send_telegram_message(target_id, "ℹ️ Ваш VIP статус был снят администратором.")
+                send_telegram_message(chat_id, f"🔒 С пользователя `{target_id}` снят VIP статус.")
+                send_telegram_message(target_id, "ℹ️ Ваш VIP статус был снят.")
             except Exception:
-                send_telegram_message(chat_id, "Ошибка. Использование: `/unvip ID`")
+                send_telegram_message(chat_id, "Использование: `/unvip ID`")
         elif text.startswith("/ban "):
             try:
                 target_id = int(text.split()[1])
                 set_ban_db(target_id, 1)
                 send_telegram_message(chat_id, f"⛔ Пользователь `{target_id}` заблокирован.")
-                send_telegram_message(target_id, "🚫 Вы были заблокированы администратором.")
+                send_telegram_message(target_id, "🚫 Вы заблокированы администратором.")
             except Exception:
-                send_telegram_message(chat_id, "Ошибка. Использование: `/ban ID`")
+                send_telegram_message(chat_id, "Использование: `/ban ID`")
         elif text.startswith("/unban "):
             try:
                 target_id = int(text.split()[1])
                 set_ban_db(target_id, 0)
                 send_telegram_message(chat_id, f"✅ Пользователь `{target_id}` разблокирован.")
-                send_telegram_message(target_id, "✨ Ваш аккаунт разблокирован администратором!")
+                send_telegram_message(target_id, "✨ Ваш аккаунт разблокирован!")
             except Exception:
-                send_telegram_message(chat_id, "Ошибка. Использование: `/unban ID`")
-        else:
-            send_telegram_message(chat_id, "Я получил ваше сообщение. Переходите на сайт для работы с ИИ!")
+                send_telegram_message(chat_id, "Использование: `/unban ID`")
 
     return {"ok": True}
 
-@app.get("/api/auth/telegram")
-def telegram_auth_callback(
-    id: int,
-    first_name: str,
-    username: Optional[str] = "",
-    auth_date: int = 0,
-    hash: str = ""
-):
-    params = {"id": id, "first_name": first_name, "username": username, "auth_date": auth_date, "hash": hash}
-    user_data = verify_telegram_auth(params)
-    if not user_data:
-        raise HTTPException(status_code=400, detail="Ошибка авторизации Telegram")
-    
-    upsert_user_db(id, username, first_name)
-    response = RedirectResponse(url="/", status_code=303)
-    response.set_cookie(key="tg_user_id", value=str(id), httponly=True, max_age=30*86400)
-    return response
+@app.get("/api/auth/start-code")
+def api_start_code():
+    code = create_auth_code()
+    bot_uname = get_bot_username()
+    bot_url = f"https://t.me/{bot_uname}?start=auth_{code}"
+    return {"code": code, "bot_url": bot_url}
+
+@app.get("/api/auth/check-code")
+def api_check_code(code: str, response: Response):
+    result = check_code_status(code)
+    if result == "expired":
+        return {"status": "expired"}
+    if result != "pending":
+        telegram_id = result
+        user = get_user_db(telegram_id)
+        if user and user["is_banned"]:
+            return {"status": "banned"}
+        
+        resp = Response(content='{"status": "success"}', media_type="application/json")
+        resp.set_cookie(key="tg_user_id", value=str(telegram_id), httponly=True, max_age=30*86400)
+        return resp
+    return {"status": "pending"}
 
 @app.get("/api/user/status")
 def get_user_status(tg_user_id: Optional[str] = Cookie(None)):
@@ -304,11 +334,11 @@ async def chat_endpoint(
     tg_user_id: Optional[str] = Cookie(None)
 ):
     if not tg_user_id:
-        raise HTTPException(status_code=401, detail="Требуется авторизация через Telegram в боковой панели")
+        raise HTTPException(status_code=401, detail="Требуется авторизация через Telegram")
     
     user = get_user_db(int(tg_user_id))
     if not user or user["is_banned"]:
-        raise HTTPException(status_code=403, detail="Ваш аккаунт заблокирован администратором.")
+        raise HTTPException(status_code=403, detail="Ваш аккаунт заблокирован.")
     
     if file and not user["is_vip"]:
         raise HTTPException(status_code=403, detail="Отправка файлов доступна только VIP пользователям.")
@@ -342,7 +372,6 @@ HTML_TEMPLATE = """
             --border-hover: rgba(168, 85, 247, 0.25);
             --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
             --vip-gradient: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-            --accent-glow: rgba(168, 85, 247, 0.15);
             --cancel-bg: rgba(248, 113, 113, 0.1);
             --cancel-border: rgba(248, 113, 113, 0.3);
             --cancel-color: #f87171;
@@ -359,19 +388,12 @@ HTML_TEMPLATE = """
 
         body::before {
             content: ''; position: fixed; top: -15vh; left: -15vw; width: 55vw; height: 55vh;
-            background: radial-gradient(circle, rgba(99, 102, 241, 0.07) 0%, rgba(168, 85, 247, 0.02) 60%, transparent 80%);
-            z-index: 0; pointer-events: none; filter: blur(80px);
-        }
-        body::after {
-            content: ''; position: fixed; bottom: -15vh; right: -15vw; width: 55vw; height: 55vh;
-            background: radial-gradient(circle, rgba(168, 85, 247, 0.06) 0%, rgba(236, 72, 153, 0.01) 60%, transparent 80%);
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.07) 0%, transparent 80%);
             z-index: 0; pointer-events: none; filter: blur(80px);
         }
 
         ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 20px; }
-        ::-webkit-scrollbar-thumb:hover { background: rgba(168, 85, 247, 0.3); }
 
         #sidebar-overlay {
             display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
@@ -381,17 +403,15 @@ HTML_TEMPLATE = """
 
         #sidebar { 
             width: 280px; min-width: 280px; background: var(--bg-sidebar); backdrop-filter: blur(24px);
-            -webkit-backdrop-filter: blur(24px); border-right: 1px solid var(--border-color); 
-            display: flex; flex-direction: column; padding: 20px 14px; z-index: 50; height: 100dvh;
+            border-right: 1px solid var(--border-color); display: flex; flex-direction: column; padding: 20px 14px; z-index: 50; height: 100dvh;
             transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.3s cubic-bezier(0.16, 1, 0.3, 1);
             box-shadow: 15px 0 40px rgba(0, 0, 0, 0.4);
         }
-        
         body.sidebar-collapsed #sidebar { margin-left: -280px; }
 
         .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; padding: 0 4px; }
-        .brand-logo-svg { width: 32px; height: 32px; filter: drop-shadow(0 0 12px rgba(168, 85, 247, 0.5)); flex-shrink: 0; }
-        .brand h2 { font-size: 15px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; display: flex; align-items: center; gap: 6px; }
+        .brand-logo-svg { width: 32px; height: 32px; flex-shrink: 0; }
+        .brand h2 { font-size: 15px; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 6px; }
         .brand span { font-size: 10px; color: var(--text-muted); font-weight: 500; display: block; }
         
         .vip-badge { background: var(--vip-gradient); color: #fff; font-size: 8px; font-weight: 800; padding: 2px 5px; border-radius: 4px; display: none; }
@@ -399,193 +419,108 @@ HTML_TEMPLATE = """
 
         .auth-box { background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px; padding: 12px; margin-bottom: 14px; text-align: center; display: flex; flex-direction: column; gap: 8px; }
         .auth-box span { font-size: 11px; color: var(--text-muted); }
+        
+        .btn-telegram-auth {
+            background: #229ed9; color: #fff; border: none; padding: 10px 14px; border-radius: 10px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; transition: 0.2s;
+        }
+        .btn-telegram-auth:hover { background: #1f8ad2; }
 
         .btn-new-chat { 
             background: var(--accent-gradient); color: #ffffff; border: none; padding: 11px 16px; 
             border-radius: 14px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 9px; 
-            margin-bottom: 18px; transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
+            margin-bottom: 18px; transition: all 0.25s ease; box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
         }
-        .btn-new-chat:hover { transform: translateY(-1px); box-shadow: 0 6px 25px rgba(168, 85, 247, 0.45); }
 
-        .chats-header { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-weight: 700; margin-bottom: 8px; padding: 0 4px; text-transform: uppercase; letter-spacing: 0.8px; }
-        
+        .chats-header { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-weight: 700; margin-bottom: 8px; padding: 0 4px; text-transform: uppercase; }
         #chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
         .chat-item { 
             background: rgba(255, 255, 255, 0.015); border: 1px solid var(--border-color); border-radius: 12px; padding: 10px 12px; 
-            font-size: 12px; color: #cbd5e1; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: all 0.2s ease;
+            font-size: 12px; color: #cbd5e1; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: 0.2s;
         }
-        .chat-item.active { background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.35); color: #ffffff; box-shadow: 0 0 20px rgba(168, 85, 247, 0.08); }
-        .chat-item:hover { background: rgba(255, 255, 255, 0.04); border-color: var(--border-hover); color: #ffffff; }
-        .chat-item .close-btn { color: var(--text-muted); font-size: 14px; cursor: pointer; border-radius: 6px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
-        .chat-item .close-btn:hover { color: #f87171; background: rgba(248, 113, 113, 0.15); }
+        .chat-item.active { background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.35); color: #ffffff; }
 
         .sidebar-footer { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border-color); }
         .status-info { display: flex; align-items: center; gap: 8px; }
-        .status-dot { width: 7px; height: 7px; background: #a855f7; border-radius: 50%; box-shadow: 0 0 10px rgba(168, 85, 247, 0.8); }
+        .status-dot { width: 7px; height: 7px; background: #a855f7; border-radius: 50%; }
 
-        #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100dvh; overflow: hidden; z-index: 1; }
-        
-        #chat-header { 
-            height: 60px; min-height: 60px; border-bottom: 1px solid var(--border-color); 
-            display: flex; align-items: center; justify-content: space-between; padding: 0 24px; background: rgba(4, 5, 8, 0.5); backdrop-filter: blur(16px); z-index: 10;
-        }
+        #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100dvh; overflow: hidden; }
+        #chat-header { height: 60px; min-height: 60px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; background: rgba(4, 5, 8, 0.5); backdrop-filter: blur(16px); z-index: 10; }
         .header-left { display: flex; align-items: center; gap: 14px; }
-        
-        .menu-toggle { 
-            background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); color: #ffffff; border-radius: 12px; padding: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;
-        }
-        .menu-toggle:hover { background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.3); }
-        #chat-header h3 { font-size: 14px; font-weight: 600; color: #ffffff; letter-spacing: -0.2px; }
+        .menu-toggle { background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); color: #ffffff; border-radius: 12px; padding: 8px; cursor: pointer; }
+        #chat-header h3 { font-size: 14px; font-weight: 600; color: #ffffff; }
 
-        #chat-container { 
-            flex: 1; overflow-y: auto; padding: 24px 24px 140px 24px; display: flex; flex-direction: column; gap: 22px; max-width: 900px; width: 100%; margin: 0 auto; position: relative; z-index: 2;
-        }
-
-        .welcome-screen {
-            position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%); text-align: center; user-select: none; pointer-events: none; width: 90%; max-width: 480px; display: flex; flex-direction: column; align-items: center; gap: 16px; animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-        .welcome-avatar-glow {
-            position: relative; padding: 20px; border-radius: 28px; background: rgba(168, 85, 247, 0.04); border: 1px solid rgba(168, 85, 247, 0.15); box-shadow: 0 0 50px rgba(168, 85, 247, 0.12); margin-bottom: 4px;
-        }
-        .welcome-avatar-svg { width: 60px; height: 60px; filter: drop-shadow(0 0 18px rgba(168, 85, 247, 0.6)); }
-        .welcome-screen h1 { font-size: 24px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; }
-        .welcome-screen p { font-size: 13.5px; color: var(--text-muted); line-height: 1.6; }
+        #chat-container { flex: 1; overflow-y: auto; padding: 24px 24px 140px 24px; display: flex; flex-direction: column; gap: 22px; max-width: 900px; width: 100%; margin: 0 auto; position: relative; z-index: 2; }
         
-        .msg-row { display: flex; flex-direction: column; width: 100%; animation: messageIn 0.35s cubic-bezier(0.16, 1, 0.3, 1); z-index: 2; }
+        .welcome-screen { position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%); text-align: center; width: 90%; max-width: 480px; display: flex; flex-direction: column; align-items: center; gap: 16px; }
+        .welcome-avatar-glow { padding: 20px; border-radius: 28px; background: rgba(168, 85, 247, 0.04); border: 1px solid rgba(168, 85, 247, 0.15); }
+        .welcome-avatar-svg { width: 60px; height: 60px; }
+        .welcome-screen h1 { font-size: 24px; font-weight: 700; color: #ffffff; }
+        .welcome-screen p { font-size: 13.5px; color: var(--text-muted); }
+
+        .msg-row { display: flex; flex-direction: column; width: 100%; }
         .msg-row.user-row { align-items: flex-end; }
         .msg-row.bot-row { align-items: flex-start; }
 
-        @keyframes messageIn { from { opacity: 0; transform: translateY(12px) scale(0.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
-        @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -46%); } to { opacity: 1; transform: translate(-50%, -50%); } }
-
-        .msg-user { 
-            background: var(--user-msg-bg); color: #ffffff; border: 1px solid rgba(168, 85, 247, 0.22); border-radius: 18px 18px 4px 18px; 
-            padding: 13px 18px; font-size: 13.5px; line-height: 1.55; max-width: 85%; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.12); word-break: break-word; backdrop-filter: blur(12px);
-        }
-        
-        .msg-bot { 
-            background: var(--bot-msg-bg); border: 1px solid var(--border-color); color: #e2e8f0; border-radius: 18px 18px 18px 4px; 
-            padding: 18px 22px; font-size: 13.5px; line-height: 1.65; max-width: 90%; box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35); word-break: break-word; backdrop-filter: blur(20px);
-        }
-
-        .msg-bot p { margin-bottom: 12px; }
-        .msg-bot p:last-child { margin-bottom: 0; }
+        .msg-user { background: var(--user-msg-bg); color: #ffffff; border: 1px solid rgba(168, 85, 247, 0.22); border-radius: 18px 18px 4px 18px; padding: 13px 18px; font-size: 13.5px; max-width: 85%; }
+        .msg-bot { background: var(--bot-msg-bg); border: 1px solid var(--border-color); color: #e2e8f0; border-radius: 18px 18px 18px 4px; padding: 18px 22px; font-size: 13.5px; max-width: 90%; }
         .msg-bot strong { color: #ffffff; font-weight: 700; }
-        .msg-bot code { background: rgba(255, 255, 255, 0.06); padding: 3px 7px; border-radius: 6px; font-family: monospace; font-size: 12px; color: #f472b6; border: 1px solid rgba(255,255,255,0.04); }
-        .msg-bot pre { background: #020305; padding: 14px; border-radius: 12px; overflow-x: auto; margin: 12px 0; border: 1px solid var(--border-color); }
-        
-        .file-preview-tag { display: inline-flex; align-items: center; gap: 6px; background: rgba(168, 85, 247, 0.15); padding: 5px 10px; border-radius: 8px; font-size: 11px; margin-bottom: 8px; border: 1px solid rgba(168, 85, 247, 0.3); color: #d8b4fe; }
+        .file-preview-tag { display: inline-flex; align-items: center; gap: 6px; background: rgba(168, 85, 247, 0.15); padding: 5px 10px; border-radius: 8px; font-size: 11px; margin-bottom: 8px; color: #d8b4fe; }
 
-        .cancelled-container { display: flex; flex-direction: column; align-items: flex-end; width: 100%; animation: messageIn 0.2s ease-out; }
-        .cancelled-line { width: 100%; max-width: 85%; height: 1px; background: rgba(255, 255, 255, 0.06); margin: 8px 0 4px 0; }
-        .cancelled-text { font-size: 10px; color: var(--text-muted); font-style: italic; letter-spacing: 0.3px; padding-right: 4px; }
-
-        .loader-box {
-            display: flex; align-items: center; gap: 12px; background: var(--bot-msg-bg); border: 1px solid var(--border-color);
-            border-radius: 18px 18px 18px 4px; padding: 14px 20px; font-size: 13.5px; color: var(--text-muted); backdrop-filter: blur(20px); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
-        }
+        .loader-box { display: flex; align-items: center; gap: 12px; background: var(--bot-msg-bg); border: 1px solid var(--border-color); border-radius: 18px; padding: 14px 20px; font-size: 13.5px; color: var(--text-muted); }
         .spinner { width: 16px; height: 16px; border: 2px solid rgba(168,85,247,0.2); border-top-color: #a855f7; border-radius: 50%; animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        #input-wrapper {
-            position: absolute; bottom: 0; left: 0; right: 0; padding: 16px 24px; padding-bottom: calc(16px + env(safe-area-inset-bottom));
-            background: linear-gradient(180deg, rgba(4, 5, 8, 0) 0%, rgba(4, 5, 8, 0.85) 40%, var(--bg-main) 100%); z-index: 20;
-        }
-
-        #input-container { 
-            max-width: 900px; margin: 0 auto; background: rgba(13, 16, 24, 0.8); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
-            border: 1px solid rgba(168, 85, 247, 0.18); border-radius: 20px; padding: 8px 12px; display: flex; flex-direction: column; gap: 8px;
-            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 25px rgba(168, 85, 247, 0.06); transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-
-        #file-info-bar { display: none; align-items: center; justify-content: space-between; background: rgba(168, 85, 247, 0.12); padding: 6px 12px; border-radius: 10px; font-size: 11.5px; color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.25); }
-        #file-info-bar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80%; }
-        #file-info-bar button { background: none; border: none; color: #f87171; cursor: pointer; font-size: 14px; transition: transform 0.2s; }
-
+        #input-wrapper { position: absolute; bottom: 0; left: 0; right: 0; padding: 16px 24px; background: linear-gradient(180deg, rgba(4,5,8,0) 0%, var(--bg-main) 80%); z-index: 20; }
+        #input-container { max-width: 900px; margin: 0 auto; background: rgba(13, 16, 24, 0.8); backdrop-filter: blur(24px); border: 1px solid rgba(168, 85, 247, 0.18); border-radius: 20px; padding: 8px 12px; display: flex; flex-direction: column; gap: 8px; }
+        #file-info-bar { display: none; align-items: center; justify-content: space-between; background: rgba(168, 85, 247, 0.12); padding: 6px 12px; border-radius: 10px; font-size: 11.5px; color: #d8b4fe; }
         .input-row { display: flex; gap: 8px; align-items: center; width: 100%; }
-
-        .mini-btn { 
-            background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); color: var(--text-muted); padding: 10px; 
-            border-radius: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; 
-        }
-        .mini-btn:hover { color: #ffffff; background: rgba(168, 85, 247, 0.12); border-color: rgba(168, 85, 247, 0.3); transform: translateY(-1px); }
-
-        #prompt-input { flex: 1; background: transparent; border: none; color: #ffffff; font-size: 14px; outline: none; min-width: 0; padding: 6px 4px; }
-        #prompt-input::placeholder { color: var(--text-muted); }
-        #prompt-input:disabled { opacity: 0.5; }
-        
-        .btn-action { 
-            background: var(--accent-gradient); color: #ffffff; border: none; border-radius: 12px; padding: 11px 20px; font-size: 12.5px; font-weight: 600; cursor: pointer; 
-            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); flex-shrink: 0; display: flex; align-items: center; justify-content: center; min-width: 100px; box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
-        }
+        .mini-btn { background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); color: var(--text-muted); padding: 10px; border-radius: 12px; cursor: pointer; transition: 0.2s; }
+        #prompt-input { flex: 1; background: transparent; border: none; color: #ffffff; font-size: 14px; outline: none; padding: 6px 4px; }
+        .btn-action { background: var(--accent-gradient); color: #ffffff; border: none; border-radius: 12px; padding: 11px 20px; font-size: 12.5px; font-weight: 600; cursor: pointer; min-width: 100px; }
         .btn-action.cancel-mode { background: var(--cancel-bg); border: 1px solid var(--cancel-border); color: var(--cancel-color); }
 
-        /* Оверлей бана */
-        #ban-overlay {
-            display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh; background: rgba(4, 5, 8, 0.95);
-            backdrop-filter: blur(20px); z-index: 100; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px;
-        }
+        #ban-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh; background: rgba(4, 5, 8, 0.95); backdrop-filter: blur(20px); z-index: 100; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; }
         #ban-overlay h2 { color: #f87171; font-size: 26px; margin-bottom: 10px; }
         #ban-overlay p { color: var(--text-muted); font-size: 14px; max-width: 400px; }
 
         @media (max-width: 768px) {
             #sidebar { position: fixed; top: 0; left: 0; margin-left: 0 !important; transform: translateX(-100%); }
             #sidebar.mobile-open { transform: translateX(0); }
-            #chat-header { padding: 0 16px; }
-            #chat-container { padding: 16px 16px 120px 16px; }
-            #input-wrapper { padding: 12px 16px; }
         }
     </style>
 </head>
 <body>
     <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
-
     <div id="ban-overlay">
         <h2>🚫 Доступ ограничен</h2>
-        <p>Ваш аккаунт был заблокирован администратором в Telegram боте. Использование сервиса недоступно.</p>
+        <p>Ваш аккаунт был заблокирован администратором.</p>
     </div>
 
     <div id="sidebar">
         <div class="brand">
             <svg class="brand-logo-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                    <linearGradient id="rubyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stop-color="#ff4b4b" />
-                        <stop offset="100%" stop-color="#900c3f" />
-                    </linearGradient>
-                </defs>
-                <path d="M50 10 L85 35 L50 90 L15 35 Z" stroke="url(#rubyGrad)" stroke-width="4" fill="none" />
-                <path d="M15 35 L85 35 M50 10 L32 35 M50 10 L68 35 M50 90 L32 35 M50 90 L68 35" stroke="url(#rubyGrad)" stroke-width="2.5" opacity="0.7" />
+                <path d="M50 10 L85 35 L50 90 L15 35 Z" stroke="#ff4b4b" stroke-width="4" fill="none" />
                 <circle cx="50" cy="48" r="14" fill="#ff4b4b" opacity="0.25" />
                 <path d="M42 45 Q46 40 50 45 Q54 40 58 45 Q60 52 50 56 Q40 52 42 45 Z" stroke="#ffffff" stroke-width="2.5" fill="none" />
             </svg>
             <div>
                 <h2>Rubinov AI <span class="vip-badge">VIP</span></h2>
-                <span id="user-display-status">Авторизуйтесь через ТГ</span>
+                <span id="user-display-status">Не авторизован</span>
             </div>
         </div>
 
         <div id="auth-section" class="auth-box">
-            <span>Вход через Telegram:</span>
-            <div id="telegram-login-container"></div>
+            <span>Вход через Telegram (код живет 1 мин):</span>
+            <a href="#" id="tg-auth-link" class="btn-telegram-auth" target="_blank" onclick="startAuthProcess()">🔑 Войти через бота</a>
+            <span id="auth-code-hint" style="font-size: 10px; display:none; color: #a855f7;">Ожидаем подтверждения в боте...</span>
         </div>
 
-        <button class="btn-new-chat" onclick="createNewChat()">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
-            Новый диалог
-        </button>
-
-        <div class="chats-header">
-            <span>Чаты (<span id="chat-count">1</span>/5)</span>
-        </div>
-
+        <button class="btn-new-chat" onclick="createNewChat()">+ Новый диалог</button>
+        <div class="chats-header"><span>Чаты (<span id="chat-count">1</span>/5)</span></div>
         <div id="chats-list"></div>
 
         <div class="sidebar-footer">
-            <div class="status-info">
-                <span class="status-dot"></span>
-                <span id="plan-text">Free план</span>
-            </div>
+            <div class="status-info"><span class="status-dot"></span><span id="plan-text">Free план</span></div>
             <span id="user-id-text" style="font-size: 10px;"></span>
         </div>
     </div>
@@ -593,9 +528,7 @@ HTML_TEMPLATE = """
     <div id="main">
         <div id="chat-header">
             <div class="header-left">
-                <button class="menu-toggle" onclick="toggleSidebar()" title="Меню">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
-                </button>
+                <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
                 <h3 id="current-chat-title">Чаты</h3>
             </div>
         </div>
@@ -606,21 +539,13 @@ HTML_TEMPLATE = """
             <div id="input-container">
                 <div id="file-info-bar">
                     <span id="file-name-text">Файл прикреплен</span>
-                    <button onclick="removeSelectedFile()">✕</button>
+                    <button onclick="removeSelectedFile()" style="background:none;border:none;color:#f87171;cursor:pointer;">✕</button>
                 </div>
                 <div class="input-row">
                     <input type="file" id="file-input" style="display: none;" onchange="handleFileSelect(event)" />
-                    
-                    <button class="mini-btn" onclick="triggerFileButton()" title="Прикрепить файл (VIP)">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                    </button>
-
-                    <button class="mini-btn" onclick="triggerImageGenerationPrompt()" title="Сгенерировать картинку">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                    </button>
-
-                    <input type="text" id="prompt-input" placeholder="Введите сообщение или опишите картинку..." onkeydown="handleKeyPress(event)" />
-                    
+                    <button class="mini-btn" onclick="triggerFileButton()" title="Файл (VIP)">📎</button>
+                    <button class="mini-btn" onclick="triggerImageGenerationPrompt()" title="Картинка">🎨</button>
+                    <input type="text" id="prompt-input" placeholder="Введите сообщение..." onkeydown="handleKeyPress(event)" />
                     <button class="btn-action" id="action-btn" onclick="handleActionButton()">Отправить</button>
                 </div>
             </div>
@@ -628,13 +553,14 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        let chats = JSON.parse(localStorage.getItem('rubinov_chats_main_v2') || '[]');
-        let currentChatId = localStorage.getItem('rubinov_active_chat_main_v2') || null;
+        let chats = JSON.parse(localStorage.getItem('rubinov_chats_v3') || '[]');
+        let currentChatId = localStorage.getItem('rubinov_active_chat_v3') || null;
         let selectedFile = null;
         let activeController = null;
         let isGenerating = false;
         let isVip = false;
         let isLogged = false;
+        let authCheckInterval = null;
 
         async function checkUserStatus() {
             try {
@@ -650,36 +576,47 @@ HTML_TEMPLATE = """
                     document.getElementById('auth-section').style.display = 'none';
                     document.getElementById('user-display-status').textContent = data.first_name;
                     document.getElementById('user-id-text').textContent = `ID: ${data.telegram_id}`;
-                    
                     if (isVip) {
                         document.body.classList.add('is-vip');
                         document.getElementById('plan-text').textContent = 'VIP План ⭐';
-                    } else {
-                        document.body.classList.remove('is-vip');
-                        document.getElementById('plan-text').textContent = 'Free План';
                     }
-                } else {
-                    renderTelegramLoginButton();
+                    if (authCheckInterval) clearInterval(authCheckInterval);
                 }
-            } catch(e) {
-                console.error(e);
-            }
+            } catch(e) { console.error(e); }
         }
 
-        function renderTelegramLoginButton() {
-            const container = document.getElementById('telegram-login-container');
-            if (container.children.length > 0) return;
-            const script = document.createElement('script');
-            script.async = true;
-            script.src = "https://telegram.org/js/telegram-widget.js?22";
-            script.setAttribute('data-telegram-login', 'rubinov_ai_bot'); // Укажите юзернейм вашего бота без @
-            script.setAttribute('data-size', 'medium');
-            script.setAttribute('data-auth-url', window.location.origin + '/api/auth/telegram');
-            script.setAttribute('data-request-access', 'write');
-            container.appendChild(script);
+        async function startAuthProcess() {
+            try {
+                const res = await fetch('/api/auth/start-code');
+                const data = await res.json();
+                document.getElementById('tg-auth-link').href = data.bot_url;
+                document.getElementById('auth-code-hint').style.display = 'block';
+                document.getElementById('auth-code-hint').textContent = `Код активен 60 сек. Перейдите в бота!`;
+                
+                if (authCheckInterval) clearInterval(authCheckInterval);
+                authCheckInterval = setInterval(() => pollAuthCode(data.code), 3000);
+            } catch(e) { alert("Не удалось сгенерировать код входа"); }
         }
 
-        setInterval(checkUserStatus, 10000); // Проверка статуса/бана каждые 10 секунд
+        async function pollAuthCode(code) {
+            try {
+                const res = await fetch(`/api/auth/check-code?code=${code}`);
+                const data = await res.json();
+                if (data.status === 'success') {
+                    clearInterval(authCheckInterval);
+                    location.reload();
+                } else if (data.status === 'expired') {
+                    clearInterval(authCheckInterval);
+                    document.getElementById('auth-code-hint').textContent = '⚠️ Код истек (прошла 1 минута). Нажмите заново.';
+                    document.getElementById('tg-auth-link').href = '#';
+                } else if (data.status === 'banned') {
+                    clearInterval(authCheckInterval);
+                    document.getElementById('ban-overlay').style.display = 'flex';
+                }
+            } catch(e) {}
+        }
+
+        setInterval(checkUserStatus, 10000);
         checkUserStatus();
 
         if (chats.length === 0) {
@@ -692,14 +629,13 @@ HTML_TEMPLATE = """
         }
 
         function saveState() {
-            localStorage.setItem('rubinov_chats_main_v2', JSON.stringify(chats));
-            localStorage.setItem('rubinov_active_chat_main_v2', currentChatId);
+            localStorage.setItem('rubinov_chats_v3', JSON.stringify(chats));
+            localStorage.setItem('rubinov_active_chat_v3', currentChatId);
             renderChats();
         }
 
         function toggleSidebar() {
-            const width = window.innerWidth;
-            if (width <= 768) {
+            if (window.innerWidth <= 768) {
                 document.getElementById('sidebar').classList.toggle('mobile-open');
                 document.getElementById('sidebar-overlay').classList.toggle('active');
             } else {
@@ -711,18 +647,13 @@ HTML_TEMPLATE = """
             const list = document.getElementById('chats-list');
             list.innerHTML = '';
             document.getElementById('chat-count').textContent = chats.length;
-
             chats.forEach(chat => {
                 const item = document.createElement('div');
                 item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
                 item.onclick = () => switchChat(chat.id);
-                item.innerHTML = `
-                    <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px;">${escapeHtml(chat.name)}</span>
-                    ${chats.length > 1 ? `<span class="close-btn" onclick="event.stopPropagation(); deleteChat('${chat.id}')">×</span>` : ''}
-                `;
+                item.innerHTML = `<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px;">${escapeHtml(chat.name)}</span>`;
                 list.appendChild(item);
             });
-
             const active = chats.find(c => c.id === currentChatId);
             if (active) {
                 document.getElementById('current-chat-title').textContent = active.name;
@@ -746,89 +677,48 @@ HTML_TEMPLATE = """
             currentChatId = newChat.id;
             setGeneratingState(false);
             saveState();
-            if (window.innerWidth <= 768) toggleSidebar();
-        }
-
-        function deleteChat(id) {
-            chats = chats.filter(c => c.id !== id);
-            if (currentChatId === id) currentChatId = chats[0].id;
-            saveState();
         }
 
         function triggerImageGenerationPrompt() {
-            const input = document.getElementById('prompt-input');
-            input.value = "Нарисуй: ";
-            input.focus();
+            document.getElementById('prompt-input').value = "Нарисуй: ";
+            document.getElementById('prompt-input').focus();
         }
 
         function triggerFileButton() {
-            if (!isLogged) { alert("Сначала авторизуйтесь через Telegram в боковой панели!"); return; }
-            if (!isVip) { alert("⭐ Отправка файлов доступна только для VIP пользователей!"); return; }
+            if (!isLogged) { alert("Сначала авторизуйтесь через бота!"); return; }
+            if (!isVip) { alert("⭐ Файлы доступны только VIP пользователям!"); return; }
             document.getElementById('file-input').click();
         }
 
         function renderMessages(messages) {
             const chatContainer = document.getElementById('chat-container');
             chatContainer.innerHTML = '';
-
             if (messages.length === 0) {
-                const welcome = document.createElement('div');
-                welcome.className = 'welcome-screen';
-                welcome.innerHTML = `
-                    <div class="welcome-avatar-glow">
-                        <svg class="welcome-avatar-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M50 10 L85 35 L50 90 L15 35 Z" stroke="url(#rubyGrad)" stroke-width="4" fill="none" />
-                            <path d="M15 35 L85 35 M50 10 L32 35 M50 10 L68 35 M50 90 L32 35 M50 90 L68 35" stroke="url(#rubyGrad)" stroke-width="2.5" opacity="0.7" />
-                            <circle cx="50" cy="48" r="14" fill="#ff4b4b" opacity="0.25" />
-                            <path d="M42 45 Q46 40 50 45 Q54 40 58 45 Q60 52 50 56 Q40 52 42 45 Z" stroke="#ffffff" stroke-width="2.5" fill="none" />
-                        </svg>
-                    </div>
-                    <h1>Rubinov AI</h1>
-                    <p>Чем я могу помочь вам сегодня?</p>
-                `;
-                chatContainer.appendChild(welcome);
+                chatContainer.innerHTML = `
+                    <div class="welcome-screen">
+                        <div class="welcome-avatar-glow">
+                            <svg class="welcome-avatar-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M50 10 L85 35 L50 90 L15 35 Z" stroke="#ff4b4b" stroke-width="4" fill="none" />
+                                <circle cx="50" cy="48" r="14" fill="#ff4b4b" opacity="0.25" />
+                                <path d="M42 45 Q46 40 50 45 Q54 40 58 45 Q60 52 50 56 Q40 52 42 45 Z" stroke="#ffffff" stroke-width="2.5" fill="none" />
+                            </svg>
+                        </div>
+                        <h1>Rubinov AI</h1>
+                        <p>Чем я могу помочь вам сегодня?</p>
+                    </div>`;
                 return;
             }
-
             messages.forEach(msg => {
                 const row = document.createElement('div');
                 row.className = `msg-row ${msg.role === 'user' ? 'user-row' : 'bot-row'}`;
-                
+                const box = document.createElement('div');
+                box.className = msg.role === 'user' ? 'msg-user' : 'msg-bot';
                 if (msg.role === 'user') {
-                    const box = document.createElement('div');
-                    box.className = 'msg-user';
-                    let content = '';
-                    if (msg.file) content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
-                    content += escapeHtml(msg.text);
-                    box.innerHTML = content;
-                    row.appendChild(box);
-                } else if (msg.role === 'cancelled') {
-                    const container = document.createElement('div');
-                    container.className = 'cancelled-container';
-                    const box = document.createElement('div');
-                    box.className = 'msg-user';
-                    let content = '';
-                    if (msg.file) content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
-                    content += escapeHtml(msg.text);
-                    box.innerHTML = content;
-                    container.appendChild(box);
-                    
-                    const line = document.createElement('div');
-                    line.className = 'cancelled-line';
-                    container.appendChild(line);
-
-                    const smallText = document.createElement('div');
-                    smallText.className = 'cancelled-text';
-                    smallText.textContent = 'сообщение отменено';
-                    container.appendChild(smallText);
-                    row.appendChild(container);
+                    box.innerHTML = (msg.file ? `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>` : '') + escapeHtml(msg.text);
                 } else {
-                    const box = document.createElement('div');
-                    box.className = 'msg-bot';
-                    if (msg.text.includes('<img')) box.innerHTML = msg.text;
-                    else box.innerHTML = marked.parse(msg.text);
-                    row.appendChild(box);
+                    box.innerHTML = msg.text.includes('<img') ? msg.text : marked.parse(msg.text);
                 }
+                row.appendChild(box);
                 chatContainer.appendChild(row);
             });
             chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -849,61 +739,42 @@ HTML_TEMPLATE = """
             document.getElementById('file-info-bar').style.display = 'none';
         }
 
-        function handleKeyPress(e) {
-            if (e.key === 'Enter') handleActionButton();
-        }
+        function handleKeyPress(e) { if (e.key === 'Enter') handleActionButton(); }
 
         function setGeneratingState(generating) {
             isGenerating = generating;
-            const actionBtn = document.getElementById('action-btn');
-            const promptInput = document.getElementById('prompt-input');
-
+            const btn = document.getElementById('action-btn');
+            const inp = document.getElementById('prompt-input');
             if (generating) {
-                actionBtn.textContent = 'Отменить';
-                actionBtn.className = 'btn-action cancel-mode';
-                promptInput.disabled = true;
+                btn.textContent = 'Отменить';
+                btn.className = 'btn-action cancel-mode';
+                inp.disabled = true;
             } else {
-                actionBtn.textContent = 'Отправить';
-                actionBtn.className = 'btn-action';
-                promptInput.disabled = false;
-                promptInput.focus();
+                btn.textContent = 'Отправить';
+                btn.className = 'btn-action';
+                inp.disabled = false;
+                inp.focus();
             }
         }
 
         function handleActionButton() {
-            if (isGenerating) cancelCurrentRequest();
-            else sendMessage();
-        }
-
-        function cancelCurrentRequest() {
-            if (activeController) {
-                activeController.abort();
-                activeController = null;
+            if (isGenerating) {
+                if (activeController) activeController.abort();
+                setGeneratingState(false);
+            } else {
+                sendMessage();
             }
-            const activeChat = chats.find(c => c.id === currentChatId);
-            if (activeChat && activeChat.messages.length > 0) {
-                const lastMsg = activeChat.messages[activeChat.messages.length - 1];
-                if (lastMsg.role === 'user') lastMsg.role = 'cancelled';
-            }
-            document.getElementById('temp-loader-row')?.remove();
-            setGeneratingState(false);
-            saveState();
         }
 
         async function sendMessage() {
-            if (!isLogged) { alert("Сначала войдите через Telegram в боковой панели слева!"); return; }
-
+            if (!isLogged) { alert("Сначала войдите через Telegram в боковой панели!"); return; }
             const input = document.getElementById('prompt-input');
             const text = input.value.trim();
             if (!text && !selectedFile) return;
 
             const activeChat = chats.find(c => c.id === currentChatId);
-            if (!activeChat) return;
-
             activeChat.messages.push({ role: 'user', text: text, file: selectedFile ? selectedFile.name : null });
-            if (activeChat.messages.length === 1 && text) {
-                activeChat.name = text.slice(0, 18) + (text.length > 18 ? '...' : '');
-            }
+            if (activeChat.messages.length === 1 && text) activeChat.name = text.slice(0, 18) + '...';
             renderMessages(activeChat.messages);
 
             const formData = new FormData();
@@ -923,30 +794,22 @@ HTML_TEMPLATE = """
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
             activeController = new AbortController();
-
             try {
                 const res = await fetch('/api/chat', { method: 'POST', body: formData, signal: activeController.signal });
                 const data = await res.json();
-
                 document.getElementById('temp-loader-row')?.remove();
                 setGeneratingState(false);
-                activeController = null;
-
                 if (res.ok) {
                     activeChat.messages.push({ role: 'bot', text: data.response });
                 } else {
-                    if (res.status === 403) {
-                        document.getElementById('ban-overlay').style.display = 'flex';
-                        return;
-                    }
-                    activeChat.messages.push({ role: 'bot', text: 'Ошибка: ' + (data.detail || 'Не удалось получить ответ.') });
+                    if (res.status === 403) { document.getElementById('ban-overlay').style.display = 'flex'; return; }
+                    activeChat.messages.push({ role: 'bot', text: 'Ошибка: ' + data.detail });
                 }
             } catch (e) {
                 if (e.name === 'AbortError') return;
                 document.getElementById('temp-loader-row')?.remove();
                 setGeneratingState(false);
-                activeController = null;
-                activeChat.messages.push({ role: 'bot', text: 'Ошибка подключения к серверу.' });
+                activeChat.messages.push({ role: 'bot', text: 'Ошибка соединения.' });
             }
             saveState();
         }
