@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
-from database import init_db, check_user_status
+from database import init_db, check_user_status, set_user_vip, register_user_if_not_exists
 from bot import handle_telegram_update
 
 app = FastAPI()
@@ -20,7 +20,6 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Инициализация базы при старте
 init_db()
 
 MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro"]
@@ -43,6 +42,11 @@ async def telegram_webhook(update: dict):
 @app.get("/api/user/status")
 def api_get_status(telegram_id: str):
     return check_user_status(telegram_id)
+
+@app.post("/api/user/set-vip")
+def api_set_vip(telegram_id: str, vip: int):
+    set_user_vip(telegram_id, vip)
+    return {"status": "success", "is_vip": bool(vip)}
 
 def get_gemini_client(api_key: str):
     return genai.Client(api_key=api_key)
@@ -126,7 +130,6 @@ async def chat_endpoint(
     answer = get_gemini_response(prompt, file_bytes, mime_type)
     return {"response": answer}
 
-# Твой оригинальный полноценный неоновый интерфейс со всеми стилями и скриптами
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -141,9 +144,9 @@ HTML_TEMPLATE = """
     <style>
         :root {
             --bg-main: #040508;
-            --bg-sidebar: rgba(10, 12, 18, 0.65);
+            --bg-sidebar: rgba(10, 12, 18, 0.75);
             --card-bg: rgba(18, 21, 31, 0.5);
-            --border-color: rgba(255, 255, 255, 0.05);
+            --border-color: rgba(255, 255, 255, 0.06);
             --border-hover: rgba(168, 85, 247, 0.25);
             --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
             --vip-gradient: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
@@ -171,16 +174,24 @@ HTML_TEMPLATE = """
         #ban-screen p { color: var(--text-muted); font-size: 14.5px; max-width: 420px; line-height: 1.6; }
 
         .vip-badge {
-            background: var(--vip-gradient);
-            color: #000;
-            font-size: 9px;
-            font-weight: 800;
-            padding: 3px 7px;
-            border-radius: 6px;
-            text-transform: uppercase;
-            box-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
-            display: inline-block;
-            letter-spacing: 0.5px;
+            background: var(--vip-gradient); color: #000; font-size: 10px; font-weight: 800;
+            padding: 4px 8px; border-radius: 6px; text-transform: uppercase;
+            box-shadow: 0 0 15px rgba(245, 158, 11, 0.4); display: inline-block; letter-spacing: 0.5px; cursor: pointer;
+        }
+
+        .auth-box {
+            background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color);
+            border-radius: 12px; padding: 12px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px;
+        }
+        .auth-box label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+        .auth-row { display: flex; gap: 6px; }
+        .auth-input {
+            flex: 1; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color);
+            border-radius: 8px; color: #fff; padding: 6px 10px; font-size: 12px; outline: none;
+        }
+        .auth-btn {
+            background: rgba(168, 85, 247, 0.2); border: 1px solid rgba(168, 85, 247, 0.4);
+            color: #d8b4fe; border-radius: 8px; padding: 6px 10px; font-size: 11px; font-weight: 600; cursor: pointer;
         }
 
         body::before {
@@ -199,41 +210,43 @@ HTML_TEMPLATE = """
         #sidebar-overlay.active { display: block; opacity: 1; }
 
         #sidebar { 
-            width: 280px; min-width: 280px; background: var(--bg-sidebar); 
+            width: 290px; min-width: 290px; background: var(--bg-sidebar); 
             backdrop-filter: blur(24px); border-right: 1px solid var(--border-color); 
-            display: flex; flex-direction: column; padding: 20px 14px; z-index: 50; height: 100dvh;
+            display: flex; flex-direction: column; padding: 18px 14px; z-index: 50; height: 100dvh;
             transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.3s cubic-bezier(0.16, 1, 0.3, 1);
         }
-        body.sidebar-collapsed #sidebar { margin-left: -280px; }
+        body.sidebar-collapsed #sidebar { margin-left: -290px; }
 
-        .brand { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; padding: 0 4px; }
-        .brand-left { display: flex; align-items: center; gap: 12px; }
-        .brand-logo-svg { width: 32px; height: 32px; filter: drop-shadow(0 0 12px rgba(168, 85, 247, 0.5)); flex-shrink: 0; }
-        .brand h2 { font-size: 15px; font-weight: 700; color: #ffffff; }
+        .brand { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding: 0 4px; }
+        .brand-left { display: flex; align-items: center; gap: 10px; }
+        .brand-logo-svg { width: 30px; height: 30px; filter: drop-shadow(0 0 12px rgba(168, 85, 247, 0.5)); flex-shrink: 0; }
+        .brand h2 { font-size: 14px; font-weight: 700; color: #ffffff; }
         .brand span { font-size: 10px; color: var(--text-muted); display: block; }
 
         .btn-new-chat { 
-            background: var(--accent-gradient); color: #ffffff; border: none; padding: 11px 16px; 
-            border-radius: 14px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; 
-            align-items: center; gap: 9px; margin-bottom: 18px; box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
+            background: var(--accent-gradient); color: #ffffff; border: none; padding: 10px 16px; 
+            border-radius: 12px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; 
+            align-items: center; gap: 9px; margin-bottom: 14px; box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
         }
 
         .chats-header { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-weight: 700; margin-bottom: 8px; padding: 0 4px; text-transform: uppercase; }
         #chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
         .chat-item { 
             background: rgba(255, 255, 255, 0.015); border: 1px solid var(--border-color); 
-            border-radius: 12px; padding: 10px 12px; font-size: 12px; color: #cbd5e1; 
+            border-radius: 10px; padding: 10px 12px; font-size: 12px; color: #cbd5e1; 
             display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: 0.2s;
         }
         .chat-item.active { background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.35); color: #ffffff; }
         .chat-item .close-btn { color: var(--text-muted); font-size: 14px; cursor: pointer; border-radius: 6px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; }
 
-        .sidebar-footer { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border-color); }
+        .sidebar-footer { font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border-color); }
+        .status-dot-wrap { display: flex; align-items: center; gap: 6px; }
         .status-dot { width: 7px; height: 7px; background: #a855f7; border-radius: 50%; box-shadow: 0 0 10px rgba(168, 85, 247, 0.8); }
 
         #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100dvh; overflow: hidden; z-index: 1; }
-        #chat-header { height: 60px; min-height: 60px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 24px; background: rgba(4, 5, 8, 0.5); backdrop-filter: blur(16px); z-index: 10; }
-        .menu-toggle { background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); color: #ffffff; border-radius: 12px; padding: 8px; cursor: pointer; display: flex; margin-right: 14px; }
+        #chat-header { height: 60px; min-height: 60px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; background: rgba(4, 5, 8, 0.5); backdrop-filter: blur(16px); z-index: 10; }
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .menu-toggle { background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); color: #ffffff; border-radius: 10px; padding: 8px; cursor: pointer; display: flex; }
         #chat-header h3 { font-size: 14px; font-weight: 600; color: #ffffff; }
 
         #chat-container { flex: 1; overflow-y: auto; padding: 24px 24px 140px 24px; display: flex; flex-direction: column; gap: 22px; max-width: 900px; width: 100%; margin: 0 auto; position: relative; z-index: 2; }
@@ -309,6 +322,15 @@ HTML_TEMPLATE = """
             <div id="badge-container"></div>
         </div>
 
+        <!-- Панель входа / смены Telegram ID -->
+        <div class="auth-box">
+            <label>Telegram ID профиля:</label>
+            <div class="auth-row">
+                <input type="text" id="tg-id-input" class="auth-input" placeholder="например: 12345678" />
+                <button class="auth-btn" onclick="saveTgId()">OK</button>
+            </div>
+        </div>
+
         <button class="btn-new-chat" onclick="createNewChat()">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
             Новый диалог
@@ -321,17 +343,23 @@ HTML_TEMPLATE = """
         <div id="chats-list"></div>
 
         <div class="sidebar-footer">
-            <span class="status-dot"></span>
-            <span>Online</span>
+            <div class="status-dot-wrap">
+                <span class="status-dot"></span>
+                <span>Online</span>
+            </div>
+            <button class="auth-btn" style="font-size:10px; padding:3px 8px;" onclick="toggleVipStatus()">VIP переключить</button>
         </div>
     </div>
 
     <div id="main">
         <div id="chat-header">
-            <button class="menu-toggle" onclick="toggleSidebar()">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
-            </button>
-            <h3 id="current-chat-title">Чаты</h3>
+            <div class="header-left">
+                <button class="menu-toggle" onclick="toggleSidebar()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+                </button>
+                <h3 id="current-chat-title">Чаты</h3>
+            </div>
+            <div id="header-vip-indicator"></div>
         </div>
 
         <div id="chat-container"></div>
@@ -363,10 +391,31 @@ HTML_TEMPLATE = """
 
     <script>
         const urlParams = new URLSearchParams(window.location.search);
-        const tgId = urlParams.get('tg_id') || 'demo_user';
+        let tgId = urlParams.get('tg_id') || localStorage.getItem('rubinov_current_tg_id') || 'demo_user';
+        
+        document.getElementById('tg-id-input').value = tgId === 'demo_user' ? '' : tgId;
 
         let isVip = false;
         let isBanned = false;
+
+        function saveTgId() {
+            const val = document.getElementById('tg-id-input').value.trim();
+            if (val) {
+                tgId = val;
+                localStorage.setItem('rubinov_current_tg_id', tgId);
+                checkStatus();
+                loadChats();
+                alert('ID успешно изменен на: ' + tgId);
+            }
+        }
+
+        async function toggleVipStatus() {
+            isVip = !isVip;
+            try {
+                await fetch(`/api/user/set-vip?telegram_id=${tgId}&vip=${isVip ? 1 : 0}`, { method: 'POST' });
+                checkStatus();
+            } catch(e) {}
+        }
 
         async function checkStatus() {
             try {
@@ -382,15 +431,18 @@ HTML_TEMPLATE = """
                 }
 
                 const badgeContainer = document.getElementById('badge-container');
+                const headerVip = document.getElementById('header-vip-indicator');
                 const fileBtn = document.getElementById('file-btn');
                 const chatLimitEl = document.getElementById('chat-limit');
 
                 if (isVip) {
-                    badgeContainer.innerHTML = '<span class="vip-badge">VIP</span>';
+                    badgeContainer.innerHTML = '<span class="vip-badge" onclick="toggleVipStatus()" title="Кликните чтобы снять VIP">VIP</span>';
+                    headerVip.innerHTML = '<span class="vip-badge">VIP Активен</span>';
                     fileBtn.style.display = 'flex';
                     chatLimitEl.textContent = '10';
                 } else {
-                    badgeContainer.innerHTML = '';
+                    badgeContainer.innerHTML = '<button class="auth-btn" style="font-size:9px;" onclick="toggleVipStatus()">Дать VIP</button>';
+                    headerVip.innerHTML = '';
                     fileBtn.style.display = 'none';
                     chatLimitEl.textContent = '5';
                 }
@@ -401,18 +453,22 @@ HTML_TEMPLATE = """
         setInterval(checkStatus, 4000);
         checkStatus();
 
-        let chats = JSON.parse(localStorage.getItem('rubinov_chats_' + tgId) || '[]');
-        let currentChatId = localStorage.getItem('rubinov_active_' + tgId) || null;
-        let selectedFile = null;
-        let activeController = null;
-        let isGenerating = false;
+        let chats = [];
+        let currentChatId = null;
 
-        if (chats.length === 0) {
-            const initialChat = { id: Date.now().toString(), name: 'Новый чат 1', created: Date.now(), messages: [] };
-            chats.push(initialChat);
-            currentChatId = initialChat.id;
-            saveState();
+        function loadChats() {
+            chats = JSON.parse(localStorage.getItem('rubinov_chats_' + tgId) || '[]');
+            currentChatId = localStorage.getItem('rubinov_active_' + tgId) || null;
+            if (chats.length === 0) {
+                const initialChat = { id: Date.now().toString(), name: 'Новый чат 1', created: Date.now(), messages: [] };
+                chats.push(initialChat);
+                currentChatId = initialChat.id;
+                saveState();
+            }
+            renderChats();
         }
+
+        loadChats();
 
         function saveState() {
             localStorage.setItem('rubinov_chats_' + tgId, JSON.stringify(chats));
@@ -459,6 +515,10 @@ HTML_TEMPLATE = """
             }
         }
 
+        let selectedFile = null;
+        let activeController = null;
+        let isGenerating = false;
+
         function switchChat(id) {
             if (activeController) activeController.abort();
             currentChatId = id;
@@ -470,7 +530,7 @@ HTML_TEMPLATE = """
         function createNewChat() {
             const limit = isVip ? 10 : 5;
             if (chats.length >= limit) {
-                alert(isVip ? 'Достигнут лимит VIP-чатов (10).' : 'Лимит Free аккаунта: 5 чатов и время жизни 4 часа! Купите VIP.');
+                alert(isVip ? 'Достигнут лимит VIP-чатов (10).' : 'Лимит Free аккаунта: 5 чатов! Купите VIP.');
                 return;
             }
             if (activeController) activeController.abort();
@@ -664,8 +724,6 @@ HTML_TEMPLATE = """
         function escapeHtml(text) {
             return (text || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
-
-        renderChats();
     </script>
 </body>
 </html>
