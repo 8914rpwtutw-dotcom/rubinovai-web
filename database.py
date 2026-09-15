@@ -1,7 +1,7 @@
+import datetime
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import Column, Integer, String, Boolean, DateTime
-import datetime
 
 DATABASE_URL = "sqlite+aiosqlite:///./database.db"
 
@@ -11,7 +11,6 @@ Base = declarative_base()
 
 class User(Base):
     __tablename__ = "users"
-    
     telegram_id = Column(Integer, primary_key=True, index=True)
     username = Column(String, nullable=True)
     is_vip = Column(Boolean, default=False)
@@ -20,7 +19,6 @@ class User(Base):
 
 class AuthCode(Base):
     __tablename__ = "auth_codes"
-    
     id = Column(Integer, primary_key=True, index=True)
     telegram_id = Column(Integer, nullable=False)
     code = Column(String, nullable=False)
@@ -28,7 +26,6 @@ class AuthCode(Base):
 
 class Ticket(Base):
     __tablename__ = "tickets"
-    
     id = Column(Integer, primary_key=True, index=True)
     telegram_id = Column(Integer, nullable=False)
     message = Column(String, nullable=False)
