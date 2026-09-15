@@ -1,31 +1,33 @@
 import os
 import time
+import urllib.parse
 from typing import Optional
+
 from fastapi import FastAPI, HTTPException, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
-app = FastAPI()
+app = FastAPI(title="Rubinov AI Web Service")
 
+# Разрешаем CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
+# Поддерживаемые модели Gemini (по порядку приоритета)
 MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro"]
 
-current_key_idx = 0
-current_model_idx = 0
-
-# Конфигурация для проверки кода из Telegram бота
-# Вы можете изменить этот код или сделать логику динамической с проверкой через базу данных/бэкенд бота
-VALID_TELEGRAM_CODES = ["123456", "777777", "RUBINOV"]
+# Мок-база валидных кодов из Telegram (в будущем можно подключить Redis / PostgreSQL)
+VALID_TELEGRAM_CODES = {"123456", "777777", "RUBINOV"}
 
 class CodeVerifyRequest(BaseModel):
     code: str
@@ -33,42 +35,41 @@ class CodeVerifyRequest(BaseModel):
 @app.post("/api/verify-code")
 async def verify_code(data: CodeVerifyRequest):
     user_code = data.code.strip()
-    # Проверка кода (можно доработать связку с Telegram ботом через БД)
-    if user_code in VALID_TELEGRAM_CODES or len(user_code) == 6:
+    if user_code in VALID_TELEGRAM_CODES or (len(user_code) == 6 and user_code.isdigit()):
         return {"status": "success", "message": "Авторизация прошла успешно"}
     raise HTTPException(status_code=400, detail="Неверный код доступа. Получите актуальный код в Telegram боте.")
 
-def get_api_keys():
-    keys = [
+def get_api_keys() -> list[str]:
+    """Собирает доступные ключи из переменных окружения."""
+    raw_keys = [
         os.getenv("GEMINI_KEY_1"),
         os.getenv("GEMINI_KEY_2"),
         os.getenv("GEMINI_KEY_3"),
         os.getenv("GEMINI_API_KEY")
     ]
-    return [k.strip() for k in keys if k and k.strip()]
+    return [k.strip() for k in raw_keys if k and k.strip()]
 
-def get_gemini_client(api_key: str):
-    return genai.Client(api_key=api_key)
-
-def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_type: Optional[str] = None) -> str:
-    global current_key_idx, current_model_idx
+def generate_image_response(prompt: str) -> str:
+    """Формирует HTML-карточку со сгенерированной картинкой."""
+    clean_prompt = prompt.replace("Нарисуй:", "").replace("нарисуй", "").replace("сгенерируй", "").strip()
+    if not clean_prompt:
+        clean_prompt = "beautiful futuristic neon cyberpunk landscape"
     
-    lowered = prompt.lower()
-    if "нарисуй" in lowered or "draw" in lowered or "сгенерируй" in lowered:
-        clean_prompt = prompt.replace("Нарисуй:", "").replace("нарисуй", "").replace("сгенерируй", "").strip()
-        if not clean_prompt:
-            clean_prompt = "beautiful futuristic neon cyberpunk landscape"
-        
-        import urllib.parse
-        encoded_prompt = urllib.parse.quote(clean_prompt)
-        img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
-        
-        return f"""Вот ваше сгенерированное изображение по запросу: *"{clean_prompt}"*
+    encoded_prompt = urllib.parse.quote(clean_prompt)
+    img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+    
+    return f"""Вот ваше сгенерированное изображение по запросу: *"{clean_prompt}"*
 
 <div style="margin-top:14px;">
     <img src="{img_url}" alt="{clean_prompt}" style="max-width:100%; border-radius:16px; display:block; margin-bottom:12px; box-shadow: 0 12px 40px rgba(168, 85, 247, 0.25); border: 1px solid rgba(255,255,255,0.1);" />
     <a href="{img_url}" target="_blank" download="rubinov_ai.jpg" style="display:inline-flex; align-items: center; gap: 8px; background: linear-gradient(135deg, #8b5cf6, #d946ef); color:#fff; padding:10px 20px; border-radius:12px; font-size:13px; text-decoration:none; font-weight:600; box-shadow: 0 4px 20px rgba(168, 85, 247, 0.4); transition: all 0.2s ease;">📥 Скачать в высоком разрешении</a>
 </div>"""
+
+def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_type: Optional[str] = None) -> str:
+    # Инициализация режимов рисования
+    lowered = prompt.lower()
+    if any(keyword in lowered for keyword in ["нарисуй", "draw", "сгенерируй"]):
+        return generate_image_response(prompt)
 
     api_keys = get_api_keys()
     if not api_keys:
@@ -77,46 +78,37 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
             detail="API-ключи не найдены в Environment Variables."
         )
 
-    num_keys = len(api_keys)
-    num_models = len(MODELS)
-    total_attempts = num_keys * num_models * 2
-
     contents = []
     if file_bytes and mime_type:
         contents.append(types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
-    if prompt:
+    if prompt.strip():
         contents.append(prompt)
 
-    for attempt in range(total_attempts):
-        active_key = api_keys[current_key_idx % num_keys]
-        active_model = MODELS[current_model_idx % num_models]
-
-        try:
-            client = get_gemini_client(active_key)
-            response = client.models.generate_content(
-                model=active_model,
-                contents=contents
-            )
-            return response.text
-
-        except APIError as e:
-            if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e) or "high demand" in str(e).lower():
-                current_model_idx += 1
-                if current_model_idx >= num_models:
-                    current_model_idx = 0
-                    current_key_idx = (current_key_idx + 1) % num_keys
-                time.sleep(0.5)
+    # Ротация Ключ -> Модель без глобальной гонки состояний
+    for api_key in api_keys:
+        client = genai.Client(api_key=api_key)
+        for model in MODELS:
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents
+                )
+                if response.text:
+                    return response.text
+            except APIError as e:
+                # В случае исчерпания лимитов (429 / 503) делаем паузу и переходим к следующему ключу/модели
+                if e.code in [429, 503] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e):
+                    time.sleep(0.3)
+                    continue
+                elif e.code == 404:
+                    continue
+                else:
+                    break
+            except Exception:
                 continue
-            elif e.code == 404 or "not found" in str(e).lower():
-                current_model_idx = (current_model_idx + 1) % num_models
-                continue
-            else:
-                break
-        except Exception:
-            break
 
     raise HTTPException(
-        status_code=500,
+        status_code=503,
         detail="Сервис ИИ перегружен в данный момент. Повторите попытку через несколько секунд."
     )
 
@@ -197,7 +189,7 @@ HTML_TEMPLATE = """
             filter: blur(100px);
         }
 
-        /* --- МОДАЛЬНОЕ ОКНО АВТОРИЗАЦИИ ТЕЛЕГРАМ --- */
+        /* МОДАЛЬНОЕ ОКНО АВТОРИЗАЦИИ */
         #auth-modal {
             position: fixed;
             top: 0; left: 0;
@@ -236,104 +228,36 @@ HTML_TEMPLATE = """
             box-shadow: 0 0 30px rgba(168, 85, 247, 0.25);
         }
 
-        .auth-card h2 {
-            font-size: 22px;
-            font-weight: 700;
-            color: #ffffff;
-            margin-bottom: 8px;
-            letter-spacing: -0.3px;
-        }
-
-        .auth-card p {
-            font-size: 13.5px;
-            color: var(--text-muted);
-            line-height: 1.5;
-            margin-bottom: 24px;
-        }
+        .auth-card h2 { font-size: 22px; font-weight: 700; color: #ffffff; margin-bottom: 8px; letter-spacing: -0.3px; }
+        .auth-card p { font-size: 13.5px; color: var(--text-muted); line-height: 1.5; margin-bottom: 24px; }
 
         .btn-telegram {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            width: 100%;
-            padding: 14px;
-            background: linear-gradient(135deg, #2AABEE 0%, #229ED9 100%);
-            color: #ffffff;
-            text-decoration: none;
-            font-weight: 600;
-            font-size: 14px;
-            border-radius: 16px;
-            margin-bottom: 20px;
-            box-shadow: 0 6px 25px rgba(34, 158, 217, 0.35);
+            display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+            width: 100%; padding: 14px; background: linear-gradient(135deg, #2AABEE 0%, #229ED9 100%);
+            color: #ffffff; text-decoration: none; font-weight: 600; font-size: 14px;
+            border-radius: 16px; margin-bottom: 20px; box-shadow: 0 6px 25px rgba(34, 158, 217, 0.35);
             transition: all 0.25s ease;
         }
-        .btn-telegram:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 30px rgba(34, 158, 217, 0.5);
-        }
+        .btn-telegram:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(34, 158, 217, 0.5); }
 
-        .auth-divider {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: var(--text-muted);
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-bottom: 20px;
-        }
-        .auth-divider::before, .auth-divider::after {
-            content: '';
-            flex: 1;
-            height: 1px;
-            background: rgba(255, 255, 255, 0.08);
-        }
+        .auth-divider { display: flex; align-items: center; gap: 12px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 20px; }
+        .auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: rgba(255, 255, 255, 0.08); }
 
         .code-input-field {
-            width: 100%;
-            background: rgba(10, 12, 18, 0.6);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 16px;
-            padding: 14px 16px;
-            color: #ffffff;
-            font-size: 16px;
-            text-align: center;
-            letter-spacing: 4px;
-            font-weight: 600;
-            outline: none;
-            margin-bottom: 16px;
-            transition: all 0.2s ease;
+            width: 100%; background: rgba(10, 12, 18, 0.6); border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px; padding: 14px 16px; color: #ffffff; font-size: 16px;
+            text-align: center; letter-spacing: 4px; font-weight: 600; outline: none; margin-bottom: 16px; transition: all 0.2s ease;
         }
-        .code-input-field:focus {
-            border-color: rgba(168, 85, 247, 0.6);
-            box-shadow: 0 0 20px rgba(168, 85, 247, 0.25);
-        }
+        .code-input-field:focus { border-color: rgba(168, 85, 247, 0.6); box-shadow: 0 0 20px rgba(168, 85, 247, 0.25); }
 
         .btn-auth-submit {
-            width: 100%;
-            padding: 14px;
-            background: var(--accent-gradient);
-            border: none;
-            border-radius: 16px;
-            color: #ffffff;
-            font-weight: 600;
-            font-size: 14px;
-            cursor: pointer;
-            box-shadow: 0 6px 25px rgba(168, 85, 247, 0.35);
-            transition: all 0.25s ease;
+            width: 100%; padding: 14px; background: var(--accent-gradient); border: none;
+            border-radius: 16px; color: #ffffff; font-weight: 600; font-size: 14px; cursor: pointer;
+            box-shadow: 0 6px 25px rgba(168, 85, 247, 0.35); transition: all 0.25s ease;
         }
-        .btn-auth-submit:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 30px rgba(168, 85, 247, 0.5);
-        }
+        .btn-auth-submit:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(168, 85, 247, 0.5); }
 
-        #auth-error {
-            color: #f87171;
-            font-size: 12px;
-            margin-top: 12px;
-            display: none;
-        }
+        #auth-error { color: #f87171; font-size: 12px; margin-top: 12px; display: none; }
 
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -341,30 +265,15 @@ HTML_TEMPLATE = """
         ::-webkit-scrollbar-thumb:hover { background: rgba(168, 85, 247, 0.4); }
 
         #sidebar-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0;
-            width: 100vw; height: 100dvh;
-            background: rgba(4, 5, 8, 0.75);
-            backdrop-filter: blur(8px);
-            z-index: 40;
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
+            background: rgba(4, 5, 8, 0.75); backdrop-filter: blur(8px); z-index: 40; opacity: 0; transition: opacity 0.3s ease;
         }
         #sidebar-overlay.active { display: block; opacity: 1; }
 
         #sidebar { 
-            width: 280px; 
-            min-width: 280px;
-            background: var(--bg-sidebar); 
-            backdrop-filter: blur(28px);
-            -webkit-backdrop-filter: blur(28px);
-            border-right: 1px solid var(--border-color); 
-            display: flex; 
-            flex-direction: column; 
-            padding: 20px 14px; 
-            z-index: 50;
-            height: 100dvh;
+            width: 280px; min-width: 280px; background: var(--bg-sidebar); backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px); border-right: 1px solid var(--border-color); 
+            display: flex; flex-direction: column; padding: 20px 14px; z-index: 50; height: 100dvh;
             transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.3s cubic-bezier(0.16, 1, 0.3, 1);
             box-shadow: 15px 0 45px rgba(0, 0, 0, 0.5);
         }
@@ -372,47 +281,27 @@ HTML_TEMPLATE = """
         body.sidebar-collapsed #sidebar { margin-left: -280px; }
 
         .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; padding: 0 6px; }
-        .brand-logo-svg { 
-            width: 34px; height: 34px; 
-            filter: drop-shadow(0 0 14px rgba(168, 85, 247, 0.6));
-            flex-shrink: 0;
-        }
+        .brand-logo-svg { width: 34px; height: 34px; filter: drop-shadow(0 0 14px rgba(168, 85, 247, 0.6)); flex-shrink: 0; }
         .brand h2 { font-size: 16px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; }
         .brand span { font-size: 11px; color: var(--text-muted); font-weight: 500; display: block; }
 
         .btn-new-chat { 
-            background: var(--accent-gradient); color: #ffffff; 
-            border: none; padding: 12px 16px; 
-            border-radius: 14px; font-size: 13px; font-weight: 600; 
-            cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; 
-            margin-bottom: 20px; transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); 
-            box-shadow: 0 4px 25px rgba(168, 85, 247, 0.35);
+            background: var(--accent-gradient); color: #ffffff; border: none; padding: 12px 16px; 
+            border-radius: 14px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; 
+            margin-bottom: 20px; transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); box-shadow: 0 4px 25px rgba(168, 85, 247, 0.35);
         }
         .btn-new-chat:hover { transform: translateY(-1px); box-shadow: 0 6px 30px rgba(168, 85, 247, 0.5); }
-        .btn-new-chat:active { transform: translateY(0); }
 
         .chats-header { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-weight: 700; margin-bottom: 10px; padding: 0 6px; text-transform: uppercase; letter-spacing: 1px; }
         
         #chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
         .chat-item { 
-            background: rgba(255, 255, 255, 0.02); 
-            border: 1px solid var(--border-color); 
-            border-radius: 12px; padding: 10px 12px; 
-            font-size: 12.5px; color: #cbd5e1; 
-            display: flex; justify-content: space-between; align-items: center; 
+            background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 12px; padding: 10px 12px; 
+            font-size: 12.5px; color: #cbd5e1; display: flex; justify-content: space-between; align-items: center; 
             cursor: pointer; transition: all 0.2s ease;
         }
-        .chat-item.active { 
-            background: rgba(168, 85, 247, 0.12); 
-            border-color: rgba(168, 85, 247, 0.4); 
-            color: #ffffff; 
-            box-shadow: 0 0 20px rgba(168, 85, 247, 0.1); 
-        }
-        .chat-item:hover { 
-            background: rgba(255, 255, 255, 0.05); 
-            border-color: var(--border-hover); 
-            color: #ffffff; 
-        }
+        .chat-item.active { background: rgba(168, 85, 247, 0.12); border-color: rgba(168, 85, 247, 0.4); color: #ffffff; box-shadow: 0 0 20px rgba(168, 85, 247, 0.1); }
+        .chat-item:hover { background: rgba(255, 255, 255, 0.05); border-color: var(--border-hover); color: #ffffff; }
         .chat-item .close-btn { color: var(--text-muted); font-size: 14px; cursor: pointer; border-radius: 6px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
         .chat-item .close-btn:hover { color: #f87171; background: rgba(248, 113, 113, 0.18); }
 
@@ -422,67 +311,34 @@ HTML_TEMPLATE = """
         #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100dvh; overflow: hidden; z-index: 1; }
         
         #chat-header { 
-            height: 64px; min-height: 64px;
-            border-bottom: 1px solid var(--border-color); 
-            display: flex; align-items: center; justify-content: space-between; 
-            padding: 0 24px; background: rgba(6, 7, 11, 0.6); 
-            backdrop-filter: blur(20px); z-index: 10;
+            height: 64px; min-height: 64px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; 
+            padding: 0 24px; background: rgba(6, 7, 11, 0.6); backdrop-filter: blur(20px); z-index: 10;
         }
         .header-left { display: flex; align-items: center; gap: 14px; }
         
         .menu-toggle { 
-            background: rgba(255, 255, 255, 0.03); 
-            border: 1px solid var(--border-color); 
-            color: #ffffff; 
-            border-radius: 12px; 
-            padding: 8px 10px; 
-            cursor: pointer; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            transition: all 0.2s ease;
+            background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: #ffffff; border-radius: 12px; 
+            padding: 8px 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;
         }
         .menu-toggle:hover { background: rgba(168, 85, 247, 0.15); border-color: rgba(168, 85, 247, 0.35); }
         
         #chat-header h3 { font-size: 15px; font-weight: 600; color: #ffffff; letter-spacing: -0.2px; }
 
         #chat-container { 
-            flex: 1; overflow-y: auto; padding: 24px 24px 160px 24px; 
-            display: flex; flex-direction: column; gap: 22px; 
-            max-width: 860px; width: 100%; margin: 0 auto;
-            position: relative;
-            z-index: 2;
+            flex: 1; overflow-y: auto; padding: 24px 24px 160px 24px; display: flex; flex-direction: column; gap: 22px; 
+            max-width: 860px; width: 100%; margin: 0 auto; position: relative; z-index: 2;
         }
 
         .welcome-screen {
-            position: absolute;
-            top: 45%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            user-select: none;
-            pointer-events: none;
-            width: 90%;
-            max-width: 480px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 16px;
+            position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%); text-align: center;
+            user-select: none; pointer-events: none; width: 90%; max-width: 480px; display: flex; flex-direction: column; align-items: center; gap: 16px;
             animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
         }
         .welcome-avatar-glow {
-            position: relative;
-            padding: 22px;
-            border-radius: 30px;
-            background: rgba(168, 85, 247, 0.05);
-            border: 1px solid rgba(168, 85, 247, 0.2);
-            box-shadow: 0 0 60px rgba(168, 85, 247, 0.15);
-            margin-bottom: 4px;
+            position: relative; padding: 22px; border-radius: 30px; background: rgba(168, 85, 247, 0.05);
+            border: 1px solid rgba(168, 85, 247, 0.2); box-shadow: 0 0 60px rgba(168, 85, 247, 0.15); margin-bottom: 4px;
         }
-        .welcome-avatar-svg {
-            width: 64px; height: 64px;
-            filter: drop-shadow(0 0 20px rgba(168, 85, 247, 0.7));
-        }
+        .welcome-avatar-svg { width: 64px; height: 64px; filter: drop-shadow(0 0 20px rgba(168, 85, 247, 0.7)); }
         .welcome-screen h1 { font-size: 26px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; }
         .welcome-screen p { font-size: 14px; color: var(--text-muted); line-height: 1.6; }
         
@@ -494,18 +350,14 @@ HTML_TEMPLATE = """
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
         .msg-user { 
-            background: var(--user-msg-bg); color: #ffffff; 
-            border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 20px 20px 4px 20px; 
-            padding: 14px 20px; font-size: 14px; line-height: 1.6; max-width: 82%; 
-            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.15); word-break: break-word;
+            background: var(--user-msg-bg); color: #ffffff; border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 20px 20px 4px 20px; 
+            padding: 14px 20px; font-size: 14px; line-height: 1.6; max-width: 82%; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.15); word-break: break-word;
             backdrop-filter: blur(16px);
         }
         
         .msg-bot { 
-            background: var(--bot-msg-bg); border: 1px solid var(--border-color); 
-            color: #e2e8f0; border-radius: 20px 20px 20px 4px; 
-            padding: 20px 24px; font-size: 14px; line-height: 1.7; max-width: 88%; 
-            box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4); word-break: break-word;
+            background: var(--bot-msg-bg); border: 1px solid var(--border-color); color: #e2e8f0; border-radius: 20px 20px 20px 4px; 
+            padding: 20px 24px; font-size: 14px; line-height: 1.7; max-width: 88%; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4); word-break: break-word;
             backdrop-filter: blur(24px);
         }
 
@@ -518,72 +370,30 @@ HTML_TEMPLATE = """
         
         .file-preview-tag { display: inline-flex; align-items: center; gap: 6px; background: rgba(168, 85, 247, 0.18); padding: 6px 12px; border-radius: 10px; font-size: 12px; margin-bottom: 8px; border: 1px solid rgba(168, 85, 247, 0.35); color: #e9d5ff; }
 
-        .cancelled-container {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            width: 100%;
-            animation: messageIn 0.2s ease-out;
-        }
-        .cancelled-line {
-            width: 100%;
-            max-width: 82%;
-            height: 1px;
-            background: rgba(255, 255, 255, 0.08);
-            margin: 8px 0 4px 0;
-        }
-        .cancelled-text {
-            font-size: 11px;
-            color: var(--text-muted);
-            font-style: italic;
-            letter-spacing: 0.3px;
-            padding-right: 4px;
-        }
+        .cancelled-container { display: flex; flex-direction: column; align-items: flex-end; width: 100%; animation: messageIn 0.2s ease-out; }
+        .cancelled-line { width: 100%; max-width: 82%; height: 1px; background: rgba(255, 255, 255, 0.08); margin: 8px 0 4px 0; }
+        .cancelled-text { font-size: 11px; color: var(--text-muted); font-style: italic; letter-spacing: 0.3px; padding-right: 4px; }
 
         .loader-box {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            background: var(--bot-msg-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 20px 20px 20px 4px;
-            padding: 16px 22px;
-            font-size: 14px;
-            color: var(--text-muted);
-            backdrop-filter: blur(24px);
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            display: flex; align-items: center; gap: 12px; background: var(--bot-msg-bg); border: 1px solid var(--border-color);
+            border-radius: 20px 20px 20px 4px; padding: 16px 22px; font-size: 14px; color: var(--text-muted); backdrop-filter: blur(24px); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
         }
         .spinner {
-            width: 18px; height: 18px;
-            border: 2px solid rgba(168,85,247,0.25);
-            border-top-color: #a855f7;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
+            width: 18px; height: 18px; border: 2px solid rgba(168,85,247,0.25); border-top-color: #a855f7; border-radius: 50%; animation: spin 0.8s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
         #input-wrapper {
-            position: absolute; bottom: 0; left: 0; right: 0; 
-            padding: 16px 24px 20px 24px; padding-bottom: calc(20px + env(safe-area-inset-bottom));
-            background: linear-gradient(180deg, rgba(6, 7, 11, 0) 0%, rgba(6, 7, 11, 0.85) 40%, var(--bg-main) 100%);
-            z-index: 20;
+            position: absolute; bottom: 0; left: 0; right: 0; padding: 16px 24px 20px 24px; padding-bottom: calc(20px + env(safe-area-inset-bottom));
+            background: linear-gradient(180deg, rgba(6, 7, 11, 0) 0%, rgba(6, 7, 11, 0.85) 40%, var(--bg-main) 100%); z-index: 20;
         }
 
         #input-container { 
-            max-width: 860px; margin: 0 auto; 
-            background: rgba(15, 18, 28, 0.82); 
-            backdrop-filter: blur(28px);
-            -webkit-backdrop-filter: blur(28px);
-            border: 1px solid rgba(168, 85, 247, 0.22); 
-            border-radius: 22px; 
-            padding: 10px 14px; display: flex; flex-direction: column; gap: 8px;
-            box-shadow: 0 16px 45px rgba(0, 0, 0, 0.6), 0 0 30px rgba(168, 85, 247, 0.08);
-            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            max-width: 860px; margin: 0 auto; background: rgba(15, 18, 28, 0.82); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px);
+            border: 1px solid rgba(168, 85, 247, 0.22); border-radius: 22px; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px;
+            box-shadow: 0 16px 45px rgba(0, 0, 0, 0.6), 0 0 30px rgba(168, 85, 247, 0.08); transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
         }
-        #input-container:focus-within {
-            border-color: rgba(168, 85, 247, 0.55);
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7), 0 0 35px rgba(168, 85, 247, 0.18);
-        }
+        #input-container:focus-within { border-color: rgba(168, 85, 247, 0.55); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7), 0 0 35px rgba(168, 85, 247, 0.18); }
 
         #file-info-bar { display: none; align-items: center; justify-content: space-between; background: rgba(168, 85, 247, 0.15); padding: 8px 14px; border-radius: 12px; font-size: 12px; color: #e9d5ff; border: 1px solid rgba(168, 85, 247, 0.3); }
         #file-info-bar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 85%; }
@@ -593,55 +403,32 @@ HTML_TEMPLATE = """
         .input-row { display: flex; gap: 10px; align-items: flex-end; width: 100%; }
 
         .mini-btn { 
-            background: rgba(255, 255, 255, 0.03); 
-            border: 1px solid var(--border-color); 
-            color: var(--text-muted); 
-            width: 40px; height: 40px;
-            border-radius: 12px; 
-            cursor: pointer; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            transition: all 0.2s ease; 
-            flex-shrink: 0;
+            background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-muted); width: 40px; height: 40px;
+            border-radius: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; flex-shrink: 0;
         }
         .mini-btn:hover { color: #ffffff; background: rgba(168, 85, 247, 0.15); border-color: rgba(168, 85, 247, 0.35); transform: translateY(-1px); }
 
         #prompt-input { 
-            flex: 1; background: transparent; border: none; color: #ffffff; 
-            font-size: 14.5px; outline: none; min-width: 0; padding: 8px 4px; 
+            flex: 1; background: transparent; border: none; color: #ffffff; font-size: 14.5px; outline: none; min-width: 0; padding: 8px 4px; 
             resize: none; max-height: 180px; min-height: 24px; line-height: 1.5;
         }
         #prompt-input::placeholder { color: var(--text-muted); }
         #prompt-input:disabled { opacity: 0.5; }
         
         .btn-action { 
-            background: var(--accent-gradient); color: #ffffff; border: none; border-radius: 12px; 
-            padding: 0 20px; height: 40px; font-size: 13px; font-weight: 600; cursor: pointer; 
+            background: var(--accent-gradient); color: #ffffff; border: none; border-radius: 12px; padding: 0 20px; height: 40px; font-size: 13px; font-weight: 600; cursor: pointer; 
             transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); flex-shrink: 0; display: flex; align-items: center; justify-content: center; min-width: 100px;
             box-shadow: 0 4px 22px rgba(168, 85, 247, 0.35);
         }
         .btn-action:hover { transform: translateY(-1px); box-shadow: 0 6px 28px rgba(168, 85, 247, 0.5); }
-        .btn-action:active { transform: translateY(0); }
         
         .btn-action.cancel-mode {
-            background: var(--cancel-bg);
-            border: 1px solid var(--cancel-border);
-            color: var(--cancel-color);
-            box-shadow: 0 4px 20px rgba(248, 113, 113, 0.18);
+            background: var(--cancel-bg); border: 1px solid var(--cancel-border); color: var(--cancel-color); box-shadow: 0 4px 20px rgba(248, 113, 113, 0.18);
         }
-        .btn-action.cancel-mode:hover {
-            background: rgba(248, 113, 113, 0.25);
-            box-shadow: 0 6px 25px rgba(248, 113, 113, 0.3);
-        }
+        .btn-action.cancel-mode:hover { background: rgba(248, 113, 113, 0.25); box-shadow: 0 6px 25px rgba(248, 113, 113, 0.3); }
 
         @media (max-width: 768px) {
-            #sidebar { 
-                position: fixed; 
-                top: 0; left: 0; 
-                margin-left: 0 !important;
-                transform: translateX(-100%); 
-            }
+            #sidebar { position: fixed; top: 0; left: 0; margin-left: 0 !important; transform: translateX(-100%); }
             #sidebar.mobile-open { transform: translateX(0); }
             #chat-header { padding: 0 16px; }
             #chat-container { padding: 16px 16px 140px 16px; }
@@ -650,7 +437,6 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
-    <!-- МОДАЛЬНОЕ ОКНО АВТОРИЗАЦИИ С ТЕЛЕГРАМ БОТОМ -->
     <div id="auth-modal">
         <div class="auth-card">
             <div class="auth-icon-wrap">
@@ -662,7 +448,6 @@ HTML_TEMPLATE = """
             <h2>Авторизация</h2>
             <p>Для доступа к **Rubinov AI** необходимо ввести одноразовый код из нашего Telegram бота.</p>
             
-            <!-- Замените ссылку ниже на username вашего бота -->
             <a href="https://t.me/RubinovAIBot" target="_blank" class="btn-telegram">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.12.02-1.96 1.25-5.54 3.69-.52.36-1 .53-1.42.52-.47-.01-1.37-.26-2.03-.48-.82-.27-1.47-.42-1.42-.88.03-.25.38-.51 1.07-.78 4.19-1.82 6.98-3.02 8.37-3.6 3.98-1.66 4.81-1.95 5.35-1.96.12 0 .38.03.55.17.14.12.18.28.2.4.02.11.02.24 0 .38z"/>
@@ -755,7 +540,6 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        // Проверка авторизации
         function checkAuth() {
             const isAuthenticated = localStorage.getItem('rubinov_auth_passed');
             if (isAuthenticated === 'true') {
@@ -797,13 +581,11 @@ HTML_TEMPLATE = """
         }
 
         document.getElementById('auth-code-input').addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                submitAuthCode();
-            }
+            if (e.key === 'Enter') submitAuthCode();
         });
 
-        let chats = JSON.parse(localStorage.getItem('rubinov_chats_main_v1') || '[]');
-        let currentChatId = localStorage.getItem('rubinov_active_chat_main_v1') || null;
+        let chats = JSON.parse(localStorage.getItem('rubinov_chats_v2') || '[]');
+        let currentChatId = localStorage.getItem('rubinov_active_chat_v2') || null;
         let selectedFile = null;
         let activeController = null;
         let isGenerating = false;
@@ -818,8 +600,8 @@ HTML_TEMPLATE = """
         }
 
         function saveState() {
-            localStorage.setItem('rubinov_chats_main_v1', JSON.stringify(chats));
-            localStorage.setItem('rubinov_active_chat_main_v1', currentChatId);
+            localStorage.setItem('rubinov_chats_v2', JSON.stringify(chats));
+            localStorage.setItem('rubinov_active_chat_v2', currentChatId);
             renderChats();
         }
 
@@ -860,15 +642,11 @@ HTML_TEMPLATE = """
         }
 
         function switchChat(id) {
-            if (activeController) {
-                activeController.abort();
-            }
+            if (activeController) activeController.abort();
             currentChatId = id;
             setGeneratingState(false);
             saveState();
-            if (window.innerWidth <= 768) {
-                toggleSidebar();
-            }
+            if (window.innerWidth <= 768) toggleSidebar();
         }
 
         function createNewChat() {
@@ -876,9 +654,8 @@ HTML_TEMPLATE = """
                 if (window.innerWidth <= 768) toggleSidebar();
                 return;
             }
-            if (activeController) {
-                activeController.abort();
-            }
+            if (activeController) activeController.abort();
+            
             const newChat = {
                 id: Date.now().toString(),
                 name: `Новый чат ${chats.length + 1}`,
@@ -937,9 +714,7 @@ HTML_TEMPLATE = """
                     const box = document.createElement('div');
                     box.className = 'msg-user';
                     let content = '';
-                    if (msg.file) {
-                        content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
-                    }
+                    if (msg.file) content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
                     content += escapeHtml(msg.text);
                     box.innerHTML = content;
                     row.appendChild(box);
@@ -950,22 +725,13 @@ HTML_TEMPLATE = """
                     const box = document.createElement('div');
                     box.className = 'msg-user';
                     let content = '';
-                    if (msg.file) {
-                        content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
-                    }
+                    if (msg.file) content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
                     content += escapeHtml(msg.text);
                     box.innerHTML = content;
                     
                     container.appendChild(box);
-                    
-                    const line = document.createElement('div');
-                    line.className = 'cancelled-line';
-                    container.appendChild(line);
-
-                    const smallText = document.createElement('div');
-                    smallText.className = 'cancelled-text';
-                    smallText.textContent = 'сообщение отменено';
-                    container.appendChild(smallText);
+                    container.appendChild(Object.assign(document.createElement('div'), { className: 'cancelled-line' }));
+                    container.appendChild(Object.assign(document.createElement('div'), { className: 'cancelled-text', textContent: 'сообщение отменено' }));
 
                     row.appendChild(container);
                 } else {
@@ -1121,9 +887,7 @@ HTML_TEMPLATE = """
                     activeChat.messages.push({ role: 'bot', text: 'Ошибка: ' + (data.detail || 'Не удалось получить ответ.') });
                 }
             } catch (e) {
-                if (e.name === 'AbortError') {
-                    return;
-                }
+                if (e.name === 'AbortError') return;
                 document.getElementById('temp-loader-row')?.remove();
                 setGeneratingState(false);
                 activeController = null;
