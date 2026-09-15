@@ -1,4 +1,5 @@
 import sqlite3
+import time
 
 DB_FILE = "rubinov_ai.db"
 
@@ -6,17 +7,17 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Таблица пользователей
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             telegram_id TEXT PRIMARY KEY,
             username TEXT,
             is_banned INTEGER DEFAULT 0,
-            is_vip INTEGER DEFAULT 0
+            is_vip INTEGER DEFAULT 0,
+            auth_code TEXT,
+            code_expires REAL
         )
     ''')
     
-    # Таблица тикетов поддержки
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tickets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,6 +63,29 @@ def register_user_if_not_exists(telegram_id: str, username: str):
     cursor.execute("INSERT OR IGNORE INTO users (telegram_id, username, is_banned, is_vip) VALUES (?, ?, 0, 0)", (telegram_id, username))
     conn.commit()
     conn.close()
+
+def save_auth_code(telegram_id: str, code: str, expires_at: float):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET auth_code = ?, code_expires = ? WHERE telegram_id = ?", (code, expires_at, telegram_id))
+    conn.commit()
+    conn.close()
+
+def find_user_by_auth_code(code: str):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT telegram_id, code_expires FROM users WHERE auth_code = ?", (code,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row:
+        return None
+        
+    telegram_id, expires_at = row[0], row[1]
+    if time.time() > expires_at:
+        return None # Код просрочен
+        
+    return telegram_id
 
 def save_ticket(telegram_id: str, message: str, created_at: float):
     conn = sqlite3.connect(DB_FILE)
