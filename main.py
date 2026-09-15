@@ -145,6 +145,7 @@ HTML_TEMPLATE = """
             --border-color: rgba(255, 255, 255, 0.05);
             --border-hover: rgba(168, 85, 247, 0.25);
             --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+            --vip-gradient: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
             --accent-glow: rgba(168, 85, 247, 0.15);
             --cancel-bg: rgba(248, 113, 113, 0.1);
             --cancel-border: rgba(248, 113, 113, 0.3);
@@ -222,7 +223,7 @@ HTML_TEMPLATE = """
             margin-left: -280px;
         }
 
-        .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; padding: 0 4px; }
+        .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; padding: 0 4px; cursor: pointer; user-select: none; }
         
         .brand-logo-svg { 
             width: 32px; height: 32px; 
@@ -230,8 +231,21 @@ HTML_TEMPLATE = """
             flex-shrink: 0;
         }
         
-        .brand h2 { font-size: 15px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; }
+        .brand h2 { font-size: 15px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; display: flex; align-items: center; gap: 8px; }
         .brand span { font-size: 10px; color: var(--text-muted); font-weight: 500; display: block; }
+
+        .vip-badge {
+            background: var(--vip-gradient);
+            color: #ffffff;
+            font-size: 9px;
+            font-weight: 800;
+            padding: 2px 6px;
+            border-radius: 6px;
+            letter-spacing: 0.5px;
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.5);
+            display: none;
+        }
+        body.is-vip .vip-badge { display: inline-block; }
 
         .btn-new-chat { 
             background: var(--accent-gradient); color: #ffffff; 
@@ -501,7 +515,7 @@ HTML_TEMPLATE = """
     <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
 
     <div id="sidebar">
-        <div class="brand">
+        <div class="brand" onclick="handleBrandClick()" title="Нажмите 3 раза для теста VIP">
             <svg class="brand-logo-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <defs>
                     <linearGradient id="rubyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -515,7 +529,7 @@ HTML_TEMPLATE = """
                 <path d="M42 45 Q46 40 50 45 Q54 40 58 45 Q60 52 50 56 Q40 52 42 45 Z" stroke="#ffffff" stroke-width="2.5" fill="none" />
             </svg>
             <div>
-                <h2>Rubinov AI</h2>
+                <h2>Rubinov AI <span class="vip-badge">VIP</span></h2>
                 <span>Assistant</span>
             </div>
         </div>
@@ -526,14 +540,14 @@ HTML_TEMPLATE = """
         </button>
 
         <div class="chats-header">
-            <span>Чаты (<span id="chat-count">1</span>/5)</span>
+            <span>Чаты (<span id="chat-count">1</span>/<span id="chat-limit-text">1</span>)</span>
         </div>
 
         <div id="chats-list"></div>
 
         <div class="sidebar-footer">
             <span class="status-dot"></span>
-            <span>Online</span>
+            <span id="footer-status-text">Free план</span>
         </div>
     </div>
 
@@ -558,7 +572,7 @@ HTML_TEMPLATE = """
                 <div class="input-row">
                     <input type="file" id="file-input" accept="image/*" capture="environment" style="display: none;" onchange="handleFileSelect(event)" />
                     
-                    <button class="mini-btn" onclick="document.getElementById('file-input').click()" title="Прикрепить фото">
+                    <button class="mini-btn" onclick="triggerFileSelect()" title="Прикрепить файл (Только VIP)">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                     </button>
 
@@ -575,20 +589,63 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        let isVip = localStorage.getItem('rubinov_is_vip') === 'true';
+        let brandClickCount = 0;
+
+        function updateVipUI() {
+            if (isVip) {
+                document.body.classList.add('is-vip');
+                document.getElementById('footer-status-text').textContent = 'VIP статус активен ⭐';
+                document.getElementById('chat-limit-text').textContent = '10';
+            } else {
+                document.body.classList.remove('is-vip');
+                document.getElementById('footer-status-text').textContent = 'Free план (история 4ч)';
+                document.getElementById('chat-limit-text').textContent = '1';
+            }
+        }
+
+        function handleBrandClick() {
+            brandClickCount++;
+            if (brandClickCount >= 3) {
+                brandClickCount = 0;
+                isVip = !isVip;
+                localStorage.setItem('rubinov_is_vip', isVip);
+                updateVipUI();
+                renderChats();
+                alert(isVip ? "⭐ VIP статус успешно активирован!" : "🔒 VIP статус отключен (Free режим)");
+            }
+            setTimeout(() => { brandClickCount = 0; }, 1500);
+        }
+
         let chats = JSON.parse(localStorage.getItem('rubinov_chats_main_v1') || '[]');
         let currentChatId = localStorage.getItem('rubinov_active_chat_main_v1') || null;
         let selectedFile = null;
         let activeController = null;
         let isGenerating = false;
 
+        // Проверка правила 4 часов для Free пользователей
+        const FOUR_HOURS = 4 * 60 * 60 * 1000;
+        const now = Date.now();
+        
+        chats.forEach(chat => {
+            if (!chat.updatedAt) chat.updatedAt = now;
+            if (!isVip && (now - chat.updatedAt > FOUR_HOURS)) {
+                chat.messages = []; // Очищаем историю старых чатов для Free
+            }
+        });
+
+        const maxChatsAllowed = isVip ? 10 : 1;
+
         if (chats.length === 0) {
-            const initialChat = { id: Date.now().toString(), name: 'Новый чат 1', messages: [] };
+            const initialChat = { id: Date.now().toString(), name: 'Новый чат 1', messages: [], updatedAt: Date.now() };
             chats.push(initialChat);
             currentChatId = initialChat.id;
             saveState();
         } else if (!currentChatId || !chats.find(c => c.id === currentChatId)) {
             currentChatId = chats[0].id;
         }
+
+        updateVipUI();
 
         function saveState() {
             localStorage.setItem('rubinov_chats_main_v1', JSON.stringify(chats));
@@ -611,9 +668,12 @@ HTML_TEMPLATE = """
         function renderChats() {
             const list = document.getElementById('chats-list');
             list.innerHTML = '';
-            document.getElementById('chat-count').textContent = chats.length;
+            const currentLimit = isVip ? 10 : 1;
+            document.getElementById('chat-count').textContent = Math.min(chats.length, currentLimit);
 
-            chats.forEach(chat => {
+            chats.forEach((chat, index) => {
+                if (!isVip && index >= 1) return; // Free пользователь видит только 1 чат
+
                 const item = document.createElement('div');
                 item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
                 item.onclick = () => switchChat(chat.id);
@@ -645,7 +705,9 @@ HTML_TEMPLATE = """
         }
 
         function createNewChat() {
-            if (chats.length >= 5) {
+            const limit = isVip ? 10 : 1;
+            if (chats.length >= limit) {
+                alert(isVip ? "Достигнут лимит чатов (10)." : "⭐ На Free-тарифе доступен только 1 чат. Получите VIP для создания новых чатов!");
                 if (window.innerWidth <= 768) toggleSidebar();
                 return;
             }
@@ -655,7 +717,8 @@ HTML_TEMPLATE = """
             const newChat = {
                 id: Date.now().toString(),
                 name: `Новый чат ${chats.length + 1}`,
-                messages: []
+                messages: [],
+                updatedAt: Date.now()
             };
             chats.push(newChat);
             currentChatId = newChat.id;
@@ -670,6 +733,14 @@ HTML_TEMPLATE = """
                 currentChatId = chats[0].id;
             }
             saveState();
+        }
+
+        function triggerFileSelect() {
+            if (!isVip) {
+                alert("⭐ Отправка файлов и документов доступна только VIP-пользователям!");
+                return;
+            }
+            document.getElementById('file-input').click();
         }
 
         function triggerImageGenerationPrompt() {
@@ -759,6 +830,10 @@ HTML_TEMPLATE = """
         function handleFileSelect(event) {
             const file = event.target.files[0];
             if (file) {
+                if (!isVip) {
+                    alert("🌟 Файлы могут отправлять только VIP-пользователи.");
+                    return;
+                }
                 selectedFile = file;
                 document.getElementById('file-name-text').textContent = `📷 ${file.name}`;
                 document.getElementById('file-info-bar').style.display = 'flex';
@@ -831,10 +906,12 @@ HTML_TEMPLATE = """
             const userMsg = {
                 role: 'user',
                 text: text,
-                file: selectedFile ? selectedFile.name : null
+                file: (isVip && selectedFile) ? selectedFile.name : null
             };
 
             activeChat.messages.push(userMsg);
+            activeChat.updatedAt = Date.now();
+            
             if (activeChat.messages.length === 1 && text) {
                 activeChat.name = text.slice(0, 18) + (text.length > 18 ? '...' : '');
             }
@@ -843,7 +920,7 @@ HTML_TEMPLATE = """
 
             const formData = new FormData();
             formData.append('prompt', text);
-            if (selectedFile) {
+            if (isVip && selectedFile) {
                 formData.append('file', selectedFile);
             }
 
