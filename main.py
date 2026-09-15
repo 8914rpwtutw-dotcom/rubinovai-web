@@ -202,6 +202,13 @@ HTML_TEMPLATE = """
             border-radius: 12px; padding: 12px; font-size: 14px; font-weight: 600; cursor: pointer;
             box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
         }
+        .btn-bot-link {
+            background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3);
+            color: #38bdf8 !important; text-decoration: none; border-radius: 12px; padding: 10px;
+            font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            transition: 0.2s;
+        }
+        .btn-bot-link:hover { background: rgba(56, 189, 248, 0.2); }
 
         .vip-badge {
             background: var(--vip-gradient); color: #000; font-size: 10px; font-weight: 800;
@@ -313,7 +320,13 @@ HTML_TEMPLATE = """
                 <path d="M42 45 Q46 40 50 45 Q54 40 58 45 Q60 52 50 56 Q40 52 42 45 Z" stroke="#ffffff" stroke-width="2.5" fill="none" />
             </svg>
             <h2>Авторизация в Rubinov AI</h2>
-            <p>Чтобы пользоваться нейросетью, откройте нашего Telegram-бота, отправьте команду <b>/login</b> и введите полученный 6-значный код:</p>
+            <p>Откройте нашего Telegram-бота, нажмите <b>🔑 Получить код</b> и введите полученный 6-значный код:</p>
+            
+            <a href="https://t.me/Rubinov_Ai_bot" target="_blank" class="btn-bot-link">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2L2 9.5l8 3.5m11.5-11.5L13.5 21l-3.5-8m0 0l-8-3.5"/></svg>
+                Открыть Telegram-бота
+            </a>
+
             <input type="text" id="otp-input" placeholder="000000" maxlength="6" />
             <button onclick="verifyOtpCode()">Войти в систему</button>
         </div>
@@ -480,7 +493,6 @@ HTML_TEMPLATE = """
             }
         }
 
-        // Проверяем при загрузке
         if (tgId === 'demo_user') {
             document.getElementById('auth-overlay').style.display = 'flex';
         } else {
