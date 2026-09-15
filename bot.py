@@ -6,8 +6,9 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from sqlalchemy import select, func
 from database import AsyncSessionLocal, AuthCode, User, Ticket
 
-BOT_TOKEN = "ТОКЕН_ОТ_BOTFATHER"  # <-- УКАЖИТЕ ТОКЕН
-ADMIN_IDS = [123456789]           # <-- УКАЖИТЕ ВАШ TELEGRAM ID
+# Данные бота
+BOT_TOKEN = "8806087253:AAFcXF76SOZCZ3aXzb5fbtsqAdPOVkz1-fs"
+ADMIN_IDS = [123456789]  # 👈 ЗАМЕНИ 123456789 НА СВОЙ TELEGRAM ID (число)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
