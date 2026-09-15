@@ -1,37 +1,71 @@
-import datetime
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
+import sqlite3
 
-DATABASE_URL = "sqlite+aiosqlite:///./database.db"
+DB_FILE = "rubinov_ai.db"
 
-engine = create_async_engine(DATABASE_URL, echo=False)
-AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-Base = declarative_base()
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    # Таблица пользователей
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id TEXT PRIMARY KEY,
+            username TEXT,
+            is_banned INTEGER DEFAULT 0,
+            is_vip INTEGER DEFAULT 0
+        )
+    ''')
+    
+    # Таблица тикетов поддержки
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tickets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id TEXT,
+            message TEXT,
+            status TEXT DEFAULT 'open',
+            created_at REAL
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
 
-class User(Base):
-    __tablename__ = "users"
-    telegram_id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, nullable=True)
-    is_vip = Column(Boolean, default=False)
-    is_banned = Column(Boolean, default=False)
-    ban_reason = Column(String, nullable=True)
+def check_user_status(telegram_id: str):
+    if not telegram_id or telegram_id == "demo_user":
+        return {"is_banned": False, "is_vip": False}
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_banned, is_vip FROM users WHERE telegram_id = ?", (telegram_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {"is_banned": False, "is_vip": False}
+    return {"is_banned": bool(row[0]), "is_vip": bool(row[1])}
 
-class AuthCode(Base):
-    __tablename__ = "auth_codes"
-    id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(Integer, nullable=False)
-    code = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+def set_user_ban(telegram_id: str, banned: int):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET is_banned = ? WHERE telegram_id = ?", (banned, telegram_id))
+    conn.commit()
+    conn.close()
 
-class Ticket(Base):
-    __tablename__ = "tickets"
-    id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(Integer, nullable=False)
-    message = Column(String, nullable=False)
-    admin_response = Column(String, nullable=True)
-    status = Column(String, default="open")
+def set_user_vip(telegram_id: str, vip: int):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET is_vip = ? WHERE telegram_id = ?", (vip, telegram_id))
+    conn.commit()
+    conn.close()
 
-async def init_db():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+def register_user_if_not_exists(telegram_id: str, username: str):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO users (telegram_id, username, is_banned, is_vip) VALUES (?, ?, 0, 0)", (telegram_id, username))
+    conn.commit()
+    conn.close()
+
+def save_ticket(telegram_id: str, message: str, created_at: float):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO tickets (telegram_id, message, created_at) VALUES (?, ?, ?)", (telegram_id, message, created_at))
+    conn.commit()
+    conn.close()
