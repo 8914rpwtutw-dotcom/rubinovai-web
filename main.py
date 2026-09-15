@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
@@ -21,6 +22,21 @@ MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro"]
 
 current_key_idx = 0
 current_model_idx = 0
+
+# Конфигурация для проверки кода из Telegram бота
+# Вы можете изменить этот код или сделать логику динамической с проверкой через базу данных/бэкенд бота
+VALID_TELEGRAM_CODES = ["123456", "777777", "RUBINOV"]
+
+class CodeVerifyRequest(BaseModel):
+    code: str
+
+@app.post("/api/verify-code")
+async def verify_code(data: CodeVerifyRequest):
+    user_code = data.code.strip()
+    # Проверка кода (можно доработать связку с Telegram ботом через БД)
+    if user_code in VALID_TELEGRAM_CODES or len(user_code) == 6:
+        return {"status": "success", "message": "Авторизация прошла успешно"}
+    raise HTTPException(status_code=400, detail="Неверный код доступа. Получите актуальный код в Telegram боте.")
 
 def get_api_keys():
     keys = [
@@ -181,6 +197,144 @@ HTML_TEMPLATE = """
             filter: blur(100px);
         }
 
+        /* --- МОДАЛЬНОЕ ОКНО АВТОРИЗАЦИИ ТЕЛЕГРАМ --- */
+        #auth-modal {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100dvh;
+            background: rgba(4, 5, 8, 0.88);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .auth-card {
+            background: rgba(18, 22, 34, 0.85);
+            border: 1px solid rgba(168, 85, 247, 0.3);
+            border-radius: 28px;
+            padding: 36px 28px;
+            max-width: 420px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 50px rgba(168, 85, 247, 0.2);
+            position: relative;
+            backdrop-filter: blur(20px);
+        }
+
+        .auth-icon-wrap {
+            width: 72px; height: 72px;
+            background: rgba(168, 85, 247, 0.12);
+            border: 1px solid rgba(168, 85, 247, 0.3);
+            border-radius: 22px;
+            display: flex; align-items: center; justify-content: center;
+            margin: 0 auto 20px auto;
+            box-shadow: 0 0 30px rgba(168, 85, 247, 0.25);
+        }
+
+        .auth-card h2 {
+            font-size: 22px;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 8px;
+            letter-spacing: -0.3px;
+        }
+
+        .auth-card p {
+            font-size: 13.5px;
+            color: var(--text-muted);
+            line-height: 1.5;
+            margin-bottom: 24px;
+        }
+
+        .btn-telegram {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #2AABEE 0%, #229ED9 100%);
+            color: #ffffff;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+            border-radius: 16px;
+            margin-bottom: 20px;
+            box-shadow: 0 6px 25px rgba(34, 158, 217, 0.35);
+            transition: all 0.25s ease;
+        }
+        .btn-telegram:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(34, 158, 217, 0.5);
+        }
+
+        .auth-divider {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: var(--text-muted);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 20px;
+        }
+        .auth-divider::before, .auth-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .code-input-field {
+            width: 100%;
+            background: rgba(10, 12, 18, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 14px 16px;
+            color: #ffffff;
+            font-size: 16px;
+            text-align: center;
+            letter-spacing: 4px;
+            font-weight: 600;
+            outline: none;
+            margin-bottom: 16px;
+            transition: all 0.2s ease;
+        }
+        .code-input-field:focus {
+            border-color: rgba(168, 85, 247, 0.6);
+            box-shadow: 0 0 20px rgba(168, 85, 247, 0.25);
+        }
+
+        .btn-auth-submit {
+            width: 100%;
+            padding: 14px;
+            background: var(--accent-gradient);
+            border: none;
+            border-radius: 16px;
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            box-shadow: 0 6px 25px rgba(168, 85, 247, 0.35);
+            transition: all 0.25s ease;
+        }
+        .btn-auth-submit:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(168, 85, 247, 0.5);
+        }
+
+        #auth-error {
+            color: #f87171;
+            font-size: 12px;
+            margin-top: 12px;
+            display: none;
+        }
+
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 20px; }
@@ -337,7 +491,7 @@ HTML_TEMPLATE = """
         .msg-row.bot-row { align-items: flex-start; }
 
         @keyframes messageIn { from { opacity: 0; transform: translateY(12px) scale(0.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
-        @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -46%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
         .msg-user { 
             background: var(--user-msg-bg); color: #ffffff; 
@@ -496,6 +650,34 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
+    <!-- МОДАЛЬНОЕ ОКНО АВТОРИЗАЦИИ С ТЕЛЕГРАМ БОТОМ -->
+    <div id="auth-modal">
+        <div class="auth-card">
+            <div class="auth-icon-wrap">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+            </div>
+            <h2>Авторизация</h2>
+            <p>Для доступа к **Rubinov AI** необходимо ввести одноразовый код из нашего Telegram бота.</p>
+            
+            <!-- Замените ссылку ниже на username вашего бота -->
+            <a href="https://t.me/RubinovAIBot" target="_blank" class="btn-telegram">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.12.02-1.96 1.25-5.54 3.69-.52.36-1 .53-1.42.52-.47-.01-1.37-.26-2.03-.48-.82-.27-1.47-.42-1.42-.88.03-.25.38-.51 1.07-.78 4.19-1.82 6.98-3.02 8.37-3.6 3.98-1.66 4.81-1.95 5.35-1.96.12 0 .38.03.55.17.14.12.18.28.2.4.02.11.02.24 0 .38z"/>
+                </svg>
+                Перейти в Telegram бота
+            </a>
+
+            <div class="auth-divider">затем введите код</div>
+
+            <input type="text" id="auth-code-input" class="code-input-field" placeholder="000000" maxlength="10" autocomplete="off" />
+            <button class="btn-auth-submit" onclick="submitAuthCode()">Войти в систему</button>
+            <div id="auth-error">Неверный код доступа. Попробуйте еще раз.</div>
+        </div>
+    </div>
+
     <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
 
     <div id="sidebar">
@@ -573,6 +755,53 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        // Проверка авторизации
+        function checkAuth() {
+            const isAuthenticated = localStorage.getItem('rubinov_auth_passed');
+            if (isAuthenticated === 'true') {
+                document.getElementById('auth-modal').style.display = 'none';
+            }
+        }
+
+        async function submitAuthCode() {
+            const input = document.getElementById('auth-code-input');
+            const errorDiv = document.getElementById('auth-error');
+            const code = input.value.trim();
+
+            if (!code) {
+                errorDiv.textContent = "Пожалуйста, введите код.";
+                errorDiv.style.display = "block";
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/verify-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: code })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    localStorage.setItem('rubinov_auth_passed', 'true');
+                    document.getElementById('auth-modal').style.display = 'none';
+                } else {
+                    errorDiv.textContent = data.detail || "Неверный код доступа.";
+                    errorDiv.style.display = "block";
+                }
+            } catch (err) {
+                errorDiv.textContent = "Ошибка проверки кода. Попробуйте еще раз.";
+                errorDiv.style.display = "block";
+            }
+        }
+
+        document.getElementById('auth-code-input').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                submitAuthCode();
+            }
+        });
+
         let chats = JSON.parse(localStorage.getItem('rubinov_chats_main_v1') || '[]');
         let currentChatId = localStorage.getItem('rubinov_active_chat_main_v1') || null;
         let selectedFile = null;
@@ -908,6 +1137,7 @@ HTML_TEMPLATE = """
             return (text || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
 
+        checkAuth();
         renderChats();
     </script>
 </body>
