@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
-from database import init_db, check_user_status, set_user_vip, register_user_if_not_exists
+from database import init_db, check_user_status, find_user_by_auth_code, save_auth_code
 from bot import handle_telegram_update
 
 app = FastAPI()
@@ -43,10 +43,14 @@ async def telegram_webhook(update: dict):
 def api_get_status(telegram_id: str):
     return check_user_status(telegram_id)
 
-@app.post("/api/user/set-vip")
-def api_set_vip(telegram_id: str, vip: int):
-    set_user_vip(telegram_id, vip)
-    return {"status": "success", "is_vip": bool(vip)}
+@app.post("/api/auth/verify-code")
+def verify_code(code: str = Form(...)):
+    telegram_id = find_user_by_auth_code(code.strip())
+    if telegram_id:
+        # Сжигаем код после успешного использования, чтобы нельзя было использовать повторно
+        save_auth_code(telegram_id, "", 0)
+        return {"status": "success", "telegram_id": telegram_id, "user": check_user_status(telegram_id)}
+    raise HTTPException(status_code=400, detail="Неверный код или время его действия истекло (5 минут).")
 
 def get_gemini_client(api_key: str):
     return genai.Client(api_key=api_key)
@@ -144,10 +148,8 @@ HTML_TEMPLATE = """
     <style>
         :root {
             --bg-main: #040508;
-            --bg-sidebar: rgba(10, 12, 18, 0.75);
-            --card-bg: rgba(18, 21, 31, 0.5);
+            --bg-sidebar: rgba(10, 12, 18, 0.85);
             --border-color: rgba(255, 255, 255, 0.06);
-            --border-hover: rgba(168, 85, 247, 0.25);
             --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
             --vip-gradient: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
             --cancel-bg: rgba(248, 113, 113, 0.1);
@@ -157,7 +159,6 @@ HTML_TEMPLATE = """
             --text-muted: #94a3b8;
             --user-msg-bg: linear-gradient(135deg, rgba(99, 102, 241, 0.16) 0%, rgba(168, 85, 247, 0.14) 100%);
             --bot-msg-bg: rgba(15, 18, 26, 0.65);
-            --scrollbar-thumb: rgba(255, 255, 255, 0.08);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
@@ -176,38 +177,23 @@ HTML_TEMPLATE = """
         .vip-badge {
             background: var(--vip-gradient); color: #000; font-size: 10px; font-weight: 800;
             padding: 4px 8px; border-radius: 6px; text-transform: uppercase;
-            box-shadow: 0 0 15px rgba(245, 158, 11, 0.4); display: inline-block; letter-spacing: 0.5px; cursor: pointer;
+            box-shadow: 0 0 15px rgba(245, 158, 11, 0.4); display: inline-block; letter-spacing: 0.5px;
         }
 
-        .auth-box {
+        .auth-card {
             background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color);
             border-radius: 12px; padding: 12px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px;
         }
-        .auth-box label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+        .auth-card label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
         .auth-row { display: flex; gap: 6px; }
         .auth-input {
-            flex: 1; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color);
-            border-radius: 8px; color: #fff; padding: 6px 10px; font-size: 12px; outline: none;
+            flex: 1; background: rgba(0,0,0,0.4); border: 1px solid var(--border-color);
+            border-radius: 8px; color: #fff; padding: 7px 10px; font-size: 13px; outline: none; text-align: center; letter-spacing: 2px;
         }
         .auth-btn {
-            background: rgba(168, 85, 247, 0.2); border: 1px solid rgba(168, 85, 247, 0.4);
-            color: #d8b4fe; border-radius: 8px; padding: 6px 10px; font-size: 11px; font-weight: 600; cursor: pointer;
+            background: var(--accent-gradient); color: #fff; border: none;
+            border-radius: 8px; padding: 7px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
         }
-
-        body::before {
-            content: ''; position: fixed; top: -15vh; left: -15vw; width: 55vw; height: 55vh;
-            background: radial-gradient(circle, rgba(99, 102, 241, 0.07) 0%, transparent 80%);
-            z-index: 0; pointer-events: none; filter: blur(80px);
-        }
-
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 20px; }
-
-        #sidebar-overlay {
-            display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
-            background: rgba(4, 5, 8, 0.7); backdrop-filter: blur(6px); z-index: 40; opacity: 0; transition: opacity 0.3s;
-        }
-        #sidebar-overlay.active { display: block; opacity: 1; }
 
         #sidebar { 
             width: 290px; min-width: 290px; background: var(--bg-sidebar); 
@@ -322,12 +308,15 @@ HTML_TEMPLATE = """
             <div id="badge-container"></div>
         </div>
 
-        <!-- Панель входа / смены Telegram ID -->
-        <div class="auth-box">
-            <label>Telegram ID профиля:</label>
+        <!-- Авторизация: простой ввод кода из бота -->
+        <div class="auth-card" id="auth-section">
+            <label>Вход через Telegram:</label>
+            <p style="font-size: 10.5px; color: var(--text-muted); margin-bottom: 6px; line-height: 1.4;">
+                Напишите боту <b>/login</b> и введите код:
+            </p>
             <div class="auth-row">
-                <input type="text" id="tg-id-input" class="auth-input" placeholder="например: 12345678" />
-                <button class="auth-btn" onclick="saveTgId()">OK</button>
+                <input type="text" id="otp-input" class="auth-input" placeholder="Код (6 цифр)" maxlength="6" />
+                <button class="auth-btn" onclick="verifyOtpCode()">Войти</button>
             </div>
         </div>
 
@@ -345,9 +334,9 @@ HTML_TEMPLATE = """
         <div class="sidebar-footer">
             <div class="status-dot-wrap">
                 <span class="status-dot"></span>
-                <span>Online</span>
+                <span id="user-status-text">Гость</span>
             </div>
-            <button class="auth-btn" style="font-size:10px; padding:3px 8px;" onclick="toggleVipStatus()">VIP переключить</button>
+            <button class="auth-btn" style="font-size:10px; padding:3px 8px; background:rgba(255,255,255,0.05); color:var(--text-muted);" onclick="logout()">Выйти</button>
         </div>
     </div>
 
@@ -390,34 +379,44 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        const urlParams = new URLSearchParams(window.location.search);
-        let tgId = urlParams.get('tg_id') || localStorage.getItem('rubinov_current_tg_id') || 'demo_user';
-        
-        document.getElementById('tg-id-input').value = tgId === 'demo_user' ? '' : tgId;
-
+        let tgId = localStorage.getItem('rubinov_current_tg_id') || 'demo_user';
         let isVip = false;
         let isBanned = false;
 
-        function saveTgId() {
-            const val = document.getElementById('tg-id-input').value.trim();
-            if (val) {
-                tgId = val;
-                localStorage.setItem('rubinov_current_tg_id', tgId);
-                checkStatus();
-                loadChats();
-                alert('ID успешно изменен на: ' + tgId);
+        async function verifyOtpCode() {
+            const code = document.getElementById('otp-input').value.trim();
+            if (!code || code.length < 6) {
+                alert('Введите 6-значный код из бота!');
+                return;
+            }
+            try {
+                const formData = new FormData();
+                formData.append('code', code);
+                
+                const res = await fetch('/api/auth/verify-code', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (res.ok) {
+                    tgId = data.telegram_id;
+                    localStorage.setItem('rubinov_current_tg_id', tgId);
+                    alert('Успешный вход!');
+                    document.getElementById('auth-section').style.display = 'none';
+                    checkStatus();
+                    loadChats();
+                } else {
+                    alert(data.detail || 'Неверный код');
+                }
+            } catch(e) {
+                alert('Ошибка авторизации');
             }
         }
 
-        async function toggleVipStatus() {
-            isVip = !isVip;
-            try {
-                await fetch(`/api/user/set-vip?telegram_id=${tgId}&vip=${isVip ? 1 : 0}`, { method: 'POST' });
-                checkStatus();
-            } catch(e) {}
+        function logout() {
+            localStorage.removeItem('rubinov_current_tg_id');
+            location.reload();
         }
 
         async function checkStatus() {
+            if (tgId === 'demo_user') return;
             try {
                 const res = await fetch(`/api/user/status?telegram_id=${tgId}`);
                 const data = await res.json();
@@ -434,24 +433,31 @@ HTML_TEMPLATE = """
                 const headerVip = document.getElementById('header-vip-indicator');
                 const fileBtn = document.getElementById('file-btn');
                 const chatLimitEl = document.getElementById('chat-limit');
+                const statusText = document.getElementById('user-status-text');
 
                 if (isVip) {
-                    badgeContainer.innerHTML = '<span class="vip-badge" onclick="toggleVipStatus()" title="Кликните чтобы снять VIP">VIP</span>';
+                    badgeContainer.innerHTML = '<span class="vip-badge">VIP</span>';
                     headerVip.innerHTML = '<span class="vip-badge">VIP Активен</span>';
                     fileBtn.style.display = 'flex';
                     chatLimitEl.textContent = '10';
+                    statusText.textContent = 'VIP Аккаунт';
                 } else {
-                    badgeContainer.innerHTML = '<button class="auth-btn" style="font-size:9px;" onclick="toggleVipStatus()">Дать VIP</button>';
+                    badgeContainer.innerHTML = '';
                     headerVip.innerHTML = '';
                     fileBtn.style.display = 'none';
                     chatLimitEl.textContent = '5';
+                    statusText.textContent = 'Free Аккаунт';
                 }
                 renderChats();
             } catch(e) {}
         }
 
-        setInterval(checkStatus, 4000);
-        checkStatus();
+        if (tgId !== 'demo_user') {
+            document.getElementById('auth-section').style.display = 'none';
+            checkStatus();
+        }
+
+        setInterval(checkStatus, 6000);
 
         let chats = [];
         let currentChatId = null;
@@ -530,7 +536,7 @@ HTML_TEMPLATE = """
         function createNewChat() {
             const limit = isVip ? 10 : 5;
             if (chats.length >= limit) {
-                alert(isVip ? 'Достигнут лимит VIP-чатов (10).' : 'Лимит Free аккаунта: 5 чатов! Купите VIP.');
+                alert(isVip ? 'Достигнут лимит VIP-чатов (10).' : 'Лимит Free аккаунта: 5 чатов!');
                 return;
             }
             if (activeController) activeController.abort();
