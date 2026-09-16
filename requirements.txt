@@ -7,3 +7,5 @@ pydantic
 python-multipart
 passlib[bcrypt]
 pyjwt
+httpx
+requests
