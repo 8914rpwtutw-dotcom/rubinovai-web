@@ -1,8 +1,9 @@
 fastapi
 uvicorn
-aiogram
 sqlalchemy
 aiosqlite
 google-genai
 pydantic
 python-multipart
+passlib[bcrypt]
+pyjwt
