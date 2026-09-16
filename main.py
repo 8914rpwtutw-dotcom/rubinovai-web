@@ -3,20 +3,23 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from google import genai
 
 app = FastAPI()
 
-# Подключение статических файлов (если у вас есть папка static для фронтенда)
+# --- ВАШИ СТАТИЧЕСКИЕ ФАЙЛЫ И ШАБЛОНЫ (КАК БЫЛО ИЗНАЧАЛЬНО) ---
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Настройки Google OAuth
+templates = Jinja2Templates(directory="templates") if os.path.exists("templates") else None
+
+# Настройки Google OAuth из переменных окружения Render
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://rubinovai-web.onrender.com/auth/google/callback")
 
-# Инициализация Gemini API с ротацией ключей из окружения
+# Инициализация Gemini API
 def get_gemini_client():
     keys = [
         os.getenv("GEMINI_KEY_1"),
@@ -26,45 +29,27 @@ def get_gemini_client():
     ]
     valid_keys = [k for k in keys if k]
     if not valid_keys:
-        raise HTTPException(status_code=500, detail="API keys for Gemini not found")
+        raise HTTPException(status_code=500, detail="Gemini API keys not found")
     return genai.Client(api_key=valid_keys[0])
 
-# Главная страница с вашим неизменным интерфейсом
+# --- ВАШ ОСНОВНОЙ ИНТЕРФЕЙС И МАРШРУТЫ ---
 @app.get("/", response_class=HTMLResponse)
-async def read_root():
-    # Если у вас фронтенд отдается как index.html, можно вернуть его содержание или шаблон
-    index_path = "index.html"
-    if os.path.exists(index_path):
-        with open(index_path, "r", encoding="utf-8") as f:
+async def read_root(request: Request):
+    # Если у вас используется шаблон index.html через Jinja2
+    if templates and os.path.exists("templates/index.html"):
+        return templates.TemplateResponse("index.html", {"request": request})
+    # Или если файл лежит в корне проекта
+    if os.path.exists("index.html"):
+        with open("index.html", "r", encoding="utf-8") as f:
             return f.read()
-    return """
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <title>Рубинов ИИ</title>
-        <style>
-            body { font-family: sans-serif; background: #0f172a; color: #f8fafc; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-            .card { background: #1e293b; padding: 40px; border-radius: 16px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
-            .btn { display: inline-block; background: #4285F4; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 20px; transition: background 0.2s; }
-            .btn:hover { background: #357ae8; }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>Рубинов ИИ</h1>
-            <p>Добро пожаловать! Войдите через аккаунт Google, чтобы продолжить.</p>
-            <a href="/auth/google" class="btn">Войти через Google</a>
-        </div>
-    </body>
-    </html>
-    """
+    return {"status": "ok", "message": "Интерфейс ожидает подключения шаблона"}
 
-# Эндпоинт инициализации входа через Google
+# --- АВТОРИЗАЦИЯ ЧЕРЕЗ GOOGLE (ПРИВЯЗАНА К КНОПКЕ ВХОДА) ---
 @app.get("/auth/google")
 def login_google():
+    """Перенаправляет пользователя на форму входа Google"""
     if not GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID is not configured")
+        raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID not configured")
     
     google_auth_url = (
         f"https://accounts.google.com/o/oauth2/v2/auth?"
@@ -75,9 +60,9 @@ def login_google():
     )
     return RedirectResponse(google_auth_url)
 
-# Callback-эндпоинт для обработки успешного входа от Google
 @app.get("/auth/google/callback")
 async def auth_google_callback(code: str):
+    """Обрабатывает ответ от Google и завершает вход"""
     token_url = "https://oauth2.googleapis.com/token"
     payload = {
         "code": code,
@@ -100,26 +85,10 @@ async def auth_google_callback(code: str):
             headers={"Authorization": f"Bearer {access_token}"}
         )
         if user_res.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to fetch Google user profile")
+            raise HTTPException(status_code=400, detail="Failed to fetch Google profile")
         
         user_info = user_res.json()
-        # Получены данные: user_info.get('email'), user_info.get('name')
+        # Данные пользователя получены (email: user_info.get('email'), имя: user_info.get('name'))
 
-    # После успешной авторизации возвращаем пользователя на главную страницу
+    # Возвращаем пользователя обратно на ваш сайт
     return RedirectResponse(url="/", status_code=303)
-
-# Пример API-эндпоинта для работы с Gemini
-@app.post("/api/chat")
-async def chat_with_gemini(request: Request):
-    data = await request.json()
-    prompt = data.get("prompt", "")
-    
-    client = get_gemini_client()
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        return {"response": response.text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
