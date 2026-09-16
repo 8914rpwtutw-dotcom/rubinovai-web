@@ -1,26 +1,14 @@
 import os
+import json
 import time
-from typing import Optional, List
-from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, File, Form, UploadFile, Depends, status
+from typing import Optional
+from fastapi import FastAPI, HTTPException, File, Form, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, EmailStr
-from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, DateTime
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
-from passlib.context import CryptContext
-import jwt
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
-
-# --- CONFIG & SECURITY ---
-SECRET_KEY = os.getenv("SECRET_KEY", "rubinov_super_secret_key_2026")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 дней
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import httpx
 
 app = FastAPI()
 
@@ -31,78 +19,15 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# --- DATABASE SETUP (SQLite) ---
-DATABASE_URL = "sqlite:///./rubinov_ai.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-class DBUser(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    chats = relationship("DBChat", back_populates="owner", cascade="all, delete-orphan")
-
-class DBChat(Base):
-    __tablename__ = "chats"
-    id = Column(String, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    name = Column(String, nullable=False)
-    messages_json = Column(Text, default="[]") # Хранение истории сообщений в JSON
-    created_at = Column(DateTime, default=datetime.utcnow)
-    owner = relationship("DBUser", back_populates="chats")
-
-Base.metadata.create_all(bind=engine)
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-# --- PYDANTIC SCHEMES ---
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
-
-# --- AUTH HELPERS ---
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-def get_current_user(token: str = Form(None), db: Session = Depends(get_db)) -> Optional[DBUser]:
-    # Для гибкости принимаем токен из заголовка или формы при запросах
-    if not token:
-        return None
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            return None
-        user = db.query(DBUser).filter(DBUser.email == email).first()
-        return user
-    except Exception:
-        return None
-
-# --- GEMINI & API LOGIC ---
 MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro"]
+
 current_key_idx = 0
 current_model_idx = 0
+
+# Настройки Google OAuth
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://rubinovai-web.onrender.com/auth/google/callback")
 
 def get_api_keys():
     keys = [
@@ -112,6 +37,9 @@ def get_api_keys():
         os.getenv("GEMINI_API_KEY")
     ]
     return [k.strip() for k in keys if k and k.strip()]
+
+def get_gemini_client(api_key: str):
+    return genai.Client(api_key=api_key)
 
 def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_type: Optional[str] = None) -> str:
     global current_key_idx, current_model_idx
@@ -135,7 +63,10 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
     api_keys = get_api_keys()
     if not api_keys:
-        raise HTTPException(status_code=500, detail="API-ключи не найдены в Environment Variables.")
+        raise HTTPException(
+            status_code=500,
+            detail="API-ключи не найдены в Environment Variables."
+        )
 
     num_keys = len(api_keys)
     num_models = len(MODELS)
@@ -152,11 +83,15 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
         active_model = MODELS[current_model_idx % num_models]
 
         try:
-            client = genai.Client(api_key=active_key)
-            response = client.models.generate_content(model=active_model, contents=contents)
+            client = get_gemini_client(active_key)
+            response = client.models.generate_content(
+                model=active_model,
+                contents=contents
+            )
             return response.text
+
         except APIError as e:
-            if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e):
+            if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e) or "high demand" in str(e).lower():
                 current_model_idx += 1
                 if current_model_idx >= num_models:
                     current_model_idx = 0
@@ -171,52 +106,107 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
         except Exception:
             break
 
-    raise HTTPException(status_code=500, detail="Сервис ИИ перегружен в данный момент. Повторите попытку.")
-
-# --- API AUTH ENDPOINTS ---
-@app.post("/api/auth/register")
-def register(data: UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(DBUser).filter(DBUser.email == data.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Пользователь с таким email уже существует")
-    
-    hashed_pwd = get_password_hash(data.password)
-    new_user = DBUser(email=data.email, hashed_password=hashed_pwd)
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    access_token = create_access_token(data={"sub": new_user.email})
-    return {"access_token": access_token, "token_type": "bearer", "email": new_user.email}
-
-@app.post("/api/auth/login")
-def login(data: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(DBUser).filter(DBUser.email == data.email).first()
-    if not user or not verify_password(data.password, user.hashed_password):
-        raise HTTPException(status_code=400, detail="Неверный email или пароль")
-    
-    access_token = create_access_token(data={"sub": user.email})
-    return {"access_token": access_token, "token_type": "bearer", "email": user.email}
-
-@app.post("/api/chat")
-async def chat_endpoint(
-    prompt: str = Form(""),
-    file: Optional[UploadFile] = File(None)
-):
-    if not prompt.strip() and not file:
-        raise HTTPException(status_code=400, detail="Запрос или файл обязателен")
-    
-    file_bytes = await file.read() if file else None
-    mime_type = file.content_type if file else None
-
-    answer = get_gemini_response(prompt, file_bytes, mime_type)
-    return {"response": answer}
+    raise HTTPException(
+        status_code=500,
+        detail="Сервис ИИ перегружен в данный момент. Повторите попытку через несколько секунд."
+    )
 
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
-# --- FRONTEND HTML TEMPLATE (СОХРАНЕН ВЕСЬ ДИЗАЙН + ДОБАВЛЕНЫ КНОПКИ АВТОРИЗАЦИИ) ---
+# --- Маршруты Google OAuth ---
+@app.get("/auth/google")
+def login_google():
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID не настроен")
+    google_auth_url = (
+        f"https://accounts.google.com/o/oauth2/v2/auth?"
+        f"client_id={GOOGLE_CLIENT_ID}&"
+        f"redirect_uri={REDIRECT_URI}&"
+        f"response_type=code&"
+        f"scope=openid%20email%20profile"
+    )
+    return RedirectResponse(google_auth_url)
+
+@app.get("/auth/google/callback")
+async def auth_google_callback(code: str):
+    token_url = "https://oauth2.googleapis.com/token"
+    payload = {
+        "code": code,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": REDIRECT_URI,
+        "grant_type": "authorization_code",
+    }
+    
+    async with httpx.AsyncClient() as client:
+        token_res = await client.post(token_url, data=payload)
+        if token_res.status_code != 200:
+            raise HTTPException(status_code=400, detail="Ошибка авторизации Google")
+        
+        token_data = token_res.json()
+        access_token = token_data.get("access_token")
+        
+        user_res = await client.get(
+            "https://www.googleapis.com/oauth2/v1/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        if user_res.status_code != 200:
+            raise HTTPException(status_code=400, detail="Не удалось получить профиль пользователя")
+        
+        user_info = user_res.json()
+        user_email = user_info.get("email")
+
+    # Перенаправляем на главную и устанавливаем куку авторизации
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(key="user_email", value=user_email, httponly=True, max_age=86400 * 30)
+    return response
+
+@app.get("/auth/logout")
+def logout():
+    response = RedirectResponse(url="/", status_code=303)
+    response.delete_cookie(key="user_email")
+    return response
+
+@app.post("/api/chat")
+async def chat_endpoint(
+    request: Request,
+    prompt: str = Form(""),
+    file: Optional[UploadFile] = File(None)
+):
+    user_email = request.cookies.get("user_email")
+    guest_count = int(request.cookies.get("guest_requests", "0"))
+
+    # Проверка лимита 10 бесплатных запросов для гостей
+    if not user_email:
+        if guest_count >= 10:
+            raise HTTPException(
+                status_code=403, 
+                detail="Исчерпан лимит (10 запросов) для гостя. Войдите через Google аккаунт, чтобы снять ограничения."
+            )
+
+    if not prompt.strip() and not file:
+        raise HTTPException(status_code=400, detail="Запрос или файл обязателен")
+    
+    file_bytes = None
+    mime_type = None
+    
+    if file:
+        file_bytes = await file.read()
+        mime_type = file.content_type
+
+    answer = get_gemini_response(prompt, file_bytes, mime_type)
+    
+    response_data = {"response": answer}
+    json_resp = JSONResponse(content=response_data)
+
+    # Увеличиваем счетчик гостя, если не авторизован
+    if not user_email:
+        json_resp.set_cookie(key="guest_requests", value=str(guest_count + 1), httponly=False)
+
+    return json_resp
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -252,128 +242,203 @@ HTML_TEMPLATE = """
         body { display: flex; position: relative; }
 
         body::before {
-            content: ''; position: fixed; top: -15vh; left: -15vw; width: 55vw; height: 55vh;
+            content: '';
+            position: fixed;
+            top: -15vh; left: -15vw;
+            width: 55vw; height: 55vh;
             background: radial-gradient(circle, rgba(99, 102, 241, 0.07) 0%, rgba(168, 85, 247, 0.02) 60%, transparent 80%);
-            z-index: 0; pointer-events: none; filter: blur(80px);
+            z-index: 0;
+            pointer-events: none;
+            filter: blur(80px);
         }
         body::after {
-            content: ''; position: fixed; bottom: -15vh; right: -15vw; width: 55vw; height: 55vh;
+            content: '';
+            position: fixed;
+            bottom: -15vh; right: -15vw;
+            width: 55vw; height: 55vh;
             background: radial-gradient(circle, rgba(168, 85, 247, 0.06) 0%, rgba(236, 72, 153, 0.01) 60%, transparent 80%);
-            z-index: 0; pointer-events: none; filter: blur(80px);
+            z-index: 0;
+            pointer-events: none;
+            filter: blur(80px);
         }
 
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 20px; }
+        ::-webkit-scrollbar-thumb {
+            background: var(--scrollbar-thumb);
+            border-radius: 20px;
+        }
         ::-webkit-scrollbar-thumb:hover { background: rgba(168, 85, 247, 0.3); }
 
         #sidebar-overlay {
-            display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
-            background: rgba(4, 5, 8, 0.7); backdrop-filter: blur(6px); z-index: 40; opacity: 0; transition: opacity 0.3s ease;
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100dvh;
+            background: rgba(4, 5, 8, 0.7);
+            backdrop-filter: blur(6px);
+            z-index: 40;
+            opacity: 0;
+            transition: opacity 0.3s ease;
         }
         #sidebar-overlay.active { display: block; opacity: 1; }
 
         #sidebar { 
-            width: 280px; min-width: 280px; background: var(--bg-sidebar); backdrop-filter: blur(24px);
-            -webkit-backdrop-filter: blur(24px); border-right: 1px solid var(--border-color); 
-            display: flex; flex-direction: column; padding: 20px 14px; z-index: 50; height: 100dvh;
+            width: 280px; 
+            min-width: 280px;
+            background: var(--bg-sidebar); 
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border-right: 1px solid var(--border-color); 
+            display: flex; 
+            flex-direction: column; 
+            padding: 20px 14px; 
+            z-index: 50;
+            height: 100dvh;
             transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.3s cubic-bezier(0.16, 1, 0.3, 1);
             box-shadow: 15px 0 40px rgba(0, 0, 0, 0.4);
         }
-        body.sidebar-collapsed #sidebar { margin-left: -280px; }
+        
+        body.sidebar-collapsed #sidebar {
+            margin-left: -280px;
+        }
 
         .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; padding: 0 4px; }
-        .brand-logo-svg { width: 32px; height: 32px; filter: drop-shadow(0 0 12px rgba(168, 85, 247, 0.5)); flex-shrink: 0; }
+        
+        .brand-logo-svg { 
+            width: 32px; height: 32px; 
+            filter: drop-shadow(0 0 12px rgba(168, 85, 247, 0.5));
+            flex-shrink: 0;
+        }
+        
         .brand h2 { font-size: 15px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; }
         .brand span { font-size: 10px; color: var(--text-muted); font-weight: 500; display: block; }
 
         .btn-new-chat { 
-            background: var(--accent-gradient); color: #ffffff; border: none; padding: 11px 16px; 
-            border-radius: 14px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; 
-            align-items: center; gap: 9px; margin-bottom: 18px; transition: all 0.25s ease; 
+            background: var(--accent-gradient); color: #ffffff; 
+            border: none; padding: 11px 16px; 
+            border-radius: 14px; font-size: 12px; font-weight: 600; 
+            cursor: pointer; display: flex; align-items: center; gap: 9px; 
+            margin-bottom: 18px; transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); 
             box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
         }
         .btn-new-chat:hover { transform: translateY(-1px); box-shadow: 0 6px 25px rgba(168, 85, 247, 0.45); }
+        .btn-new-chat:active { transform: translateY(0); }
 
         .chats-header { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-weight: 700; margin-bottom: 8px; padding: 0 4px; text-transform: uppercase; letter-spacing: 0.8px; }
         
         #chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
         .chat-item { 
-            background: rgba(255, 255, 255, 0.015); border: 1px solid var(--border-color); border-radius: 12px; 
-            padding: 10px 12px; font-size: 12px; color: #cbd5e1; display: flex; justify-content: space-between; 
-            align-items: center; cursor: pointer; transition: all 0.2s ease;
+            background: rgba(255, 255, 255, 0.015); 
+            border: 1px solid var(--border-color); 
+            border-radius: 12px; padding: 10px 12px; 
+            font-size: 12px; color: #cbd5e1; 
+            display: flex; justify-content: space-between; align-items: center; 
+            cursor: pointer; transition: all 0.2s ease;
         }
-        .chat-item.active { background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.35); color: #ffffff; box-shadow: 0 0 20px rgba(168, 85, 247, 0.08); }
-        .chat-item:hover { background: rgba(255, 255, 255, 0.04); border-color: var(--border-hover); color: #ffffff; }
+        .chat-item.active { 
+            background: rgba(168, 85, 247, 0.1); 
+            border-color: rgba(168, 85, 247, 0.35); 
+            color: #ffffff; 
+            box-shadow: 0 0 20px rgba(168, 85, 247, 0.08); 
+        }
+        .chat-item:hover { 
+            background: rgba(255, 255, 255, 0.04); 
+            border-color: var(--border-hover); 
+            color: #ffffff; 
+        }
         .chat-item .close-btn { color: var(--text-muted); font-size: 14px; cursor: pointer; border-radius: 6px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
         .chat-item .close-btn:hover { color: #f87171; background: rgba(248, 113, 113, 0.15); }
 
-        /* AUTH FOOTER STYLING (Плавные органичные кнопки под стиль) */
-        .sidebar-footer { font-size: 11px; color: var(--text-muted); display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border-color); }
-        .footer-status-row { display: flex; align-items: center; justify-content: space-between; width: 100%; }
-        .status-info { display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px; }
-        .status-dot { width: 7px; height: 7px; background: #a855f7; border-radius: 50%; box-shadow: 0 0 10px rgba(168, 85, 247, 0.8); flex-shrink: 0; }
-        
-        .auth-btn-mini {
-            background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-main);
-            padding: 6px 12px; border-radius: 10px; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s;
-            text-align: center; width: 100%; display: block; text-decoration: none;
-        }
-        .auth-btn-mini:hover { background: rgba(168, 85, 247, 0.12); border-color: rgba(168, 85, 247, 0.3); color: #fff; }
-        .auth-btn-mini.accent { background: var(--accent-gradient); border: none; color: #fff; box-shadow: 0 2px 10px rgba(99, 102, 241, 0.2); }
+        .sidebar-footer { font-size: 11px; color: var(--text-muted); display: flex; flex-direction: column; gap: 8px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border-color); }
+        .footer-info { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+        .footer-left-status { display: flex; align-items: center; gap: 8px; }
+        .status-dot { width: 7px; height: 7px; background: #a855f7; border-radius: 50%; box-shadow: 0 0 10px rgba(168, 85, 247, 0.8); }
 
-        /* MODAL WINDOWS FOR AUTH */
-        .auth-modal {
-            display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
-            background: rgba(4, 5, 8, 0.8); backdrop-filter: blur(10px); z-index: 100;
-            align-items: center; justify-content: center;
+        .btn-google-login {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            padding: 8px 12px;
+            border-radius: 10px;
+            font-size: 11.5px;
+            font-weight: 600;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s ease;
         }
-        .auth-modal.active { display: flex; }
-        .auth-card {
-            background: rgba(15, 18, 26, 0.9); border: 1px solid rgba(168, 85, 247, 0.25);
-            border-radius: 24px; padding: 30px; width: 90%; max-width: 380px;
-            box-shadow: 0 20px 50px rgba(0,0,0,0.6), 0 0 30px rgba(168, 85, 247, 0.1);
-            display: flex; flex-direction: column; gap: 16px; position: relative;
+        .btn-google-login:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(168, 85, 247, 0.4);
         }
-        .auth-card h3 { font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 4px; }
-        .auth-input {
-            background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 12px;
-            padding: 12px 16px; color: #fff; font-size: 13.5px; outline: none; transition: 0.2s; width: 100%;
-        }
-        .auth-input:focus { border-color: rgba(168, 85, 247, 0.5); background: rgba(255, 255, 255, 0.06); }
-        .auth-close { position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; }
 
         #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100dvh; overflow: hidden; z-index: 1; }
         
         #chat-header { 
-            height: 60px; min-height: 60px; border-bottom: 1px solid var(--border-color); 
-            display: flex; align-items: center; justify-content: space-between; padding: 0 24px; 
-            background: rgba(4, 5, 8, 0.5); backdrop-filter: blur(16px); z-index: 10;
+            height: 60px; min-height: 60px;
+            border-bottom: 1px solid var(--border-color); 
+            display: flex; align-items: center; justify-content: space-between; 
+            padding: 0 24px; background: rgba(4, 5, 8, 0.5); 
+            backdrop-filter: blur(16px); z-index: 10;
         }
         .header-left { display: flex; align-items: center; gap: 14px; }
         
         .menu-toggle { 
-            background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); color: #ffffff; 
-            border-radius: 12px; padding: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;
+            background: rgba(255, 255, 255, 0.02); 
+            border: 1px solid var(--border-color); 
+            color: #ffffff; 
+            border-radius: 12px; 
+            padding: 8px; 
+            cursor: pointer; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            transition: all 0.2s ease;
         }
         .menu-toggle:hover { background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.3); }
+        
         #chat-header h3 { font-size: 14px; font-weight: 600; color: #ffffff; letter-spacing: -0.2px; }
 
         #chat-container { 
-            flex: 1; overflow-y: auto; padding: 24px 24px 140px 24px; display: flex; flex-direction: column; gap: 22px; 
-            max-width: 900px; width: 100%; margin: 0 auto; position: relative; z-index: 2;
+            flex: 1; overflow-y: auto; padding: 24px 24px 140px 24px; 
+            display: flex; flex-direction: column; gap: 22px; 
+            max-width: 900px; width: 100%; margin: 0 auto;
+            position: relative;
+            z-index: 2;
         }
 
         .welcome-screen {
-            position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%);
-            text-align: center; user-select: none; pointer-events: none; width: 90%; max-width: 480px;
-            display: flex; flex-direction: column; align-items: center; gap: 16px; animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+            position: absolute;
+            top: 45%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            user-select: none;
+            pointer-events: none;
+            width: 90%;
+            max-width: 480px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+            animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
         }
         .welcome-avatar-glow {
-            position: relative; padding: 20px; border-radius: 28px; background: rgba(168, 85, 247, 0.04);
-            border: 1px solid rgba(168, 85, 247, 0.15); box-shadow: 0 0 50px rgba(168, 85, 247, 0.12); margin-bottom: 4px;
+            position: relative;
+            padding: 20px;
+            border-radius: 28px;
+            background: rgba(168, 85, 247, 0.04);
+            border: 1px solid rgba(168, 85, 247, 0.15);
+            box-shadow: 0 0 50px rgba(168, 85, 247, 0.12);
+            margin-bottom: 4px;
         }
-        .welcome-avatar-svg { width: 60px; height: 60px; filter: drop-shadow(0 0 18px rgba(168, 85, 247, 0.6)); }
+        .welcome-avatar-svg {
+            width: 60px; height: 60px;
+            filter: drop-shadow(0 0 18px rgba(168, 85, 247, 0.6));
+        }
         .welcome-screen h1 { font-size: 24px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; }
         .welcome-screen p { font-size: 13.5px; color: var(--text-muted); line-height: 1.6; }
         
@@ -385,15 +450,21 @@ HTML_TEMPLATE = """
         @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -46%); } to { opacity: 1; transform: translate(-50%, -50%); } }
 
         .msg-user { 
-            background: var(--user-msg-bg); color: #ffffff; border: 1px solid rgba(168, 85, 247, 0.22); 
-            border-radius: 18px 18px 4px 18px; padding: 13px 18px; font-size: 13.5px; line-height: 1.55; 
-            max-width: 85%; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.12); word-break: break-word; backdrop-filter: blur(12px);
+            background: var(--user-msg-bg); color: #ffffff; 
+            border: 1px solid rgba(168, 85, 247, 0.22); border-radius: 18px 18px 4px 18px; 
+            padding: 13px 18px; font-size: 13.5px; line-height: 1.55; max-width: 85%; 
+            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.12); word-break: break-word;
+            backdrop-filter: blur(12px);
         }
+        
         .msg-bot { 
-            background: var(--bot-msg-bg); border: 1px solid var(--border-color); color: #e2e8f0; 
-            border-radius: 18px 18px 18px 4px; padding: 18px 22px; font-size: 13.5px; line-height: 1.65; 
-            max-width: 90%; box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35); word-break: break-word; backdrop-filter: blur(20px);
+            background: var(--bot-msg-bg); border: 1px solid var(--border-color); 
+            color: #e2e8f0; border-radius: 18px 18px 18px 4px; 
+            padding: 18px 22px; font-size: 13.5px; line-height: 1.65; max-width: 90%; 
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35); word-break: break-word;
+            backdrop-filter: blur(20px);
         }
+
         .msg-bot p { margin-bottom: 12px; }
         .msg-bot p:last-child { margin-bottom: 0; }
         .msg-bot strong { color: #ffffff; font-weight: 700; }
@@ -403,18 +474,47 @@ HTML_TEMPLATE = """
         
         .file-preview-tag { display: inline-flex; align-items: center; gap: 6px; background: rgba(168, 85, 247, 0.15); padding: 5px 10px; border-radius: 8px; font-size: 11px; margin-bottom: 8px; border: 1px solid rgba(168, 85, 247, 0.3); color: #d8b4fe; }
 
-        .cancelled-container { display: flex; flex-direction: column; align-items: flex-end; width: 100%; animation: messageIn 0.2s ease-out; }
-        .cancelled-line { width: 100%; max-width: 85%; height: 1px; background: rgba(255, 255, 255, 0.06); margin: 8px 0 4px 0; }
-        .cancelled-text { font-size: 10px; color: var(--text-muted); font-style: italic; letter-spacing: 0.3px; padding-right: 4px; }
+        .cancelled-container {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            width: 100%;
+            animation: messageIn 0.2s ease-out;
+        }
+        .cancelled-line {
+            width: 100%;
+            max-width: 85%;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.06);
+            margin: 8px 0 4px 0;
+        }
+        .cancelled-text {
+            font-size: 10px;
+            color: var(--text-muted);
+            font-style: italic;
+            letter-spacing: 0.3px;
+            padding-right: 4px;
+        }
 
         .loader-box {
-            display: flex; align-items: center; gap: 12px; background: var(--bot-msg-bg);
-            border: 1px solid var(--border-color); border-radius: 18px 18px 18px 4px; padding: 14px 20px;
-            font-size: 13.5px; color: var(--text-muted); backdrop-filter: blur(20px); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--bot-msg-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 18px 18px 18px 4px;
+            padding: 14px 20px;
+            font-size: 13.5px;
+            color: var(--text-muted);
+            backdrop-filter: blur(20px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
         }
         .spinner {
-            width: 16px; height: 16px; border: 2px solid rgba(168,85,247,0.2);
-            border-top-color: #a855f7; border-radius: 50%; animation: spin 0.8s linear infinite;
+            width: 16px; height: 16px;
+            border: 2px solid rgba(168,85,247,0.2);
+            border-top-color: #a855f7;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -424,23 +524,41 @@ HTML_TEMPLATE = """
             background: linear-gradient(180deg, rgba(4, 5, 8, 0) 0%, rgba(4, 5, 8, 0.85) 40%, var(--bg-main) 100%);
             z-index: 20;
         }
+
         #input-container { 
-            max-width: 900px; margin: 0 auto; background: rgba(13, 16, 24, 0.8); backdrop-filter: blur(24px);
-            -webkit-backdrop-filter: blur(24px); border: 1px solid rgba(168, 85, 247, 0.18); border-radius: 20px; 
+            max-width: 900px; margin: 0 auto; 
+            background: rgba(13, 16, 24, 0.8); 
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(168, 85, 247, 0.18); 
+            border-radius: 20px; 
             padding: 8px 12px; display: flex; flex-direction: column; gap: 8px;
             box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 25px rgba(168, 85, 247, 0.06);
             transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
         }
-        #input-container:focus-within { border-color: rgba(168, 85, 247, 0.45); box-shadow: 0 14px 45px rgba(0, 0, 0, 0.7), 0 0 30px rgba(168, 85, 247, 0.15); }
+        #input-container:focus-within {
+            border-color: rgba(168, 85, 247, 0.45);
+            box-shadow: 0 14px 45px rgba(0, 0, 0, 0.7), 0 0 30px rgba(168, 85, 247, 0.15);
+        }
 
         #file-info-bar { display: none; align-items: center; justify-content: space-between; background: rgba(168, 85, 247, 0.12); padding: 6px 12px; border-radius: 10px; font-size: 11.5px; color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.25); }
         #file-info-bar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80%; }
         #file-info-bar button { background: none; border: none; color: #f87171; cursor: pointer; font-size: 14px; transition: transform 0.2s; }
-        
+        #file-info-bar button:hover { transform: scale(1.15); }
+
         .input-row { display: flex; gap: 8px; align-items: center; width: 100%; }
+
         .mini-btn { 
-            background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); color: var(--text-muted); 
-            padding: 10px; border-radius: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; 
+            background: rgba(255, 255, 255, 0.02); 
+            border: 1px solid var(--border-color); 
+            color: var(--text-muted); 
+            padding: 10px; 
+            border-radius: 12px; 
+            cursor: pointer; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            transition: all 0.2s ease; 
         }
         .mini-btn:hover { color: #ffffff; background: rgba(168, 85, 247, 0.12); border-color: rgba(168, 85, 247, 0.3); transform: translateY(-1px); }
 
@@ -454,10 +572,27 @@ HTML_TEMPLATE = """
             transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); flex-shrink: 0; display: flex; align-items: center; justify-content: center; min-width: 100px;
             box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
         }
-        .btn-action.cancel-mode { background: var(--cancel-bg); border: 1px solid var(--cancel-border); color: var(--cancel-color); }
+        .btn-action:hover { transform: translateY(-1px); box-shadow: 0 6px 25px rgba(168, 85, 247, 0.45); }
+        .btn-action:active { transform: translateY(0); }
+        
+        .btn-action.cancel-mode {
+            background: var(--cancel-bg);
+            border: 1px solid var(--cancel-border);
+            color: var(--cancel-color);
+            box-shadow: 0 4px 20px rgba(248, 113, 113, 0.15);
+        }
+        .btn-action.cancel-mode:hover {
+            background: rgba(248, 113, 113, 0.22);
+            box-shadow: 0 6px 25px rgba(248, 113, 113, 0.25);
+        }
 
         @media (max-width: 768px) {
-            #sidebar { position: fixed; top: 0; left: 0; margin-left: 0 !important; transform: translateX(-100%); }
+            #sidebar { 
+                position: fixed; 
+                top: 0; left: 0; 
+                margin-left: 0 !important;
+                transform: translateX(-100%); 
+            }
             #sidebar.mobile-open { transform: translateX(0); }
             #chat-header { padding: 0 16px; }
             #chat-container { padding: 16px 16px 120px 16px; }
@@ -467,21 +602,6 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
-
-    <!-- МОДАЛЬНОЕ ОКНО АВТОРИЗАЦИИ -->
-    <div id="auth-modal" class="auth-modal">
-        <div class="auth-card">
-            <button class="auth-close" onclick="closeAuthModal()">✕</button>
-            <h3 id="auth-title">Вход в аккаунт</h3>
-            <p style="font-size: 12px; color: var(--text-muted);">Используйте аккаунт для сохранения истории диалогов.</p>
-            <input type="email" id="auth-email" class="auth-input" placeholder="Email...">
-            <input type="password" id="auth-password" class="auth-input" placeholder="Пароль...">
-            <button class="btn-action" style="width:100%; margin-top:4px;" onclick="submitAuth()">Продолжить</button>
-            <div style="text-align: center; font-size: 11.5px; color: var(--text-muted); cursor: pointer;" onclick="toggleAuthMode()" id="auth-switch-text">
-                Нет аккаунта? Зарегистрироваться
-            </div>
-        </div>
-    </div>
 
     <div id="sidebar">
         <div class="brand">
@@ -514,16 +634,14 @@ HTML_TEMPLATE = """
 
         <div id="chats-list"></div>
 
-        <!-- ФУТЕР С АВТОРИЗАЦИЕЙ (ПОДХОДИТ ПО ДИЗАЙНУ) -->
         <div class="sidebar-footer">
-            <div class="footer-status-row">
-                <div class="status-info">
+            <!-- Блок авторизации и лимитов -->
+            USER_AUTH_BLOCK
+            <div class="footer-info">
+                <div class="footer-left-status">
                     <span class="status-dot"></span>
-                    <span id="user-email-label" style="font-size: 11.5px; color: var(--text-main);">Гость</span>
+                    <span>Online</span>
                 </div>
-            </div>
-            <div id="auth-buttons-container">
-                <button class="auth-btn-mini accent" onclick="openAuthModal('login')">Войти</button>
             </div>
         </div>
     </div>
@@ -568,12 +686,9 @@ HTML_TEMPLATE = """
     <script>
         let chats = JSON.parse(localStorage.getItem('rubinov_chats_main_v1') || '[]');
         let currentChatId = localStorage.getItem('rubinov_active_chat_main_v1') || null;
-        let authToken = localStorage.getItem('rubinov_auth_token') || null;
-        let currentUserEmail = localStorage.getItem('rubinov_user_email') || null;
         let selectedFile = null;
         let activeController = null;
         let isGenerating = false;
-        let isRegisterMode = false;
 
         if (chats.length === 0) {
             const initialChat = { id: Date.now().toString(), name: 'Новый чат 1', messages: [] };
@@ -584,87 +699,19 @@ HTML_TEMPLATE = """
             currentChatId = chats[0].id;
         }
 
-        updateAuthUI();
-
         function saveState() {
             localStorage.setItem('rubinov_chats_main_v1', JSON.stringify(chats));
             localStorage.setItem('rubinov_active_chat_main_v1', currentChatId);
             renderChats();
         }
 
-        function updateAuthUI() {
-            const label = document.getElementById('user-email-label');
-            const container = document.getElementById('auth-buttons-container');
-            if (authToken && currentUserEmail) {
-                label.textContent = currentUserEmail;
-                container.innerHTML = `<button class="auth-btn-mini" onclick="logout()">Выйти</button>`;
-            } else {
-                label.textContent = "Гость";
-                container.innerHTML = `<button class="auth-btn-mini accent" onclick="openAuthModal('login')">Войти</button>`;
-            }
-        }
-
-        function openAuthModal(mode) {
-            isRegisterMode = (mode === 'register');
-            document.getElementById('auth-modal').classList.add('active');
-            document.getElementById('auth-title').textContent = isRegisterMode ? 'Регистрация' : 'Вход в аккаунт';
-            document.getElementById('auth-switch-text').textContent = isRegisterMode ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Зарегистрироваться';
-        }
-
-        function closeAuthModal() {
-            document.getElementById('auth-modal').classList.remove('active');
-        }
-
-        function toggleAuthMode() {
-            isRegisterMode = !isRegisterMode;
-            document.getElementById('auth-title').textContent = isRegisterMode ? 'Регистрация' : 'Вход в аккаунт';
-            document.getElementById('auth-switch-text').textContent = isRegisterMode ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Зарегистрироваться';
-        }
-
-        async function submitAuth() {
-            const email = document.getElementById('auth-email').value.trim();
-            const password = document.getElementById('auth-password').value.trim();
-            if (!email || !password) {
-                alert('Заполните все поля');
-                return;
-            }
-
-            const endpoint = isRegisterMode ? '/api/auth/register' : '/api/auth/login';
-            try {
-                const res = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    authToken = data.access_token;
-                    currentUserEmail = data.email;
-                    localStorage.setItem('rubinov_auth_token', authToken);
-                    localStorage.setItem('rubinov_user_email', currentUserEmail);
-                    updateAuthUI();
-                    closeAuthModal();
-                } else {
-                    alert(data.detail || 'Ошибка авторизации');
-                }
-            } catch(e) {
-                alert('Ошибка соединения с сервером');
-            }
-        }
-
-        function logout() {
-            authToken = null;
-            currentUserEmail = null;
-            localStorage.removeItem('rubinov_auth_token');
-            localStorage.removeItem('rubinov_user_email');
-            updateAuthUI();
-        }
-
         function toggleSidebar() {
             const width = window.innerWidth;
             if (width <= 768) {
-                document.getElementById('sidebar').classList.toggle('mobile-open');
-                document.getElementById('sidebar-overlay').classList.toggle('active');
+                const sidebar = document.getElementById('sidebar');
+                const overlay = document.getElementById('sidebar-overlay');
+                sidebar.classList.toggle('mobile-open');
+                overlay.classList.toggle('active');
             } else {
                 document.body.classList.toggle('sidebar-collapsed');
             }
@@ -679,6 +726,7 @@ HTML_TEMPLATE = """
                 const item = document.createElement('div');
                 item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
                 item.onclick = () => switchChat(chat.id);
+
                 item.innerHTML = `
                     <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px;">${escapeHtml(chat.name)}</span>
                     ${chats.length > 1 ? `<span class="close-btn" onclick="event.stopPropagation(); deleteChat('${chat.id}')">×</span>` : ''}
@@ -694,11 +742,15 @@ HTML_TEMPLATE = """
         }
 
         function switchChat(id) {
-            if (activeController) activeController.abort();
+            if (activeController) {
+                activeController.abort();
+            }
             currentChatId = id;
             setGeneratingState(false);
             saveState();
-            if (window.innerWidth <= 768) toggleSidebar();
+            if (window.innerWidth <= 768) {
+                toggleSidebar();
+            }
         }
 
         function createNewChat() {
@@ -706,8 +758,14 @@ HTML_TEMPLATE = """
                 if (window.innerWidth <= 768) toggleSidebar();
                 return;
             }
-            if (activeController) activeController.abort();
-            const newChat = { id: Date.now().toString(), name: `Новый чат ${chats.length + 1}`, messages: [] };
+            if (activeController) {
+                activeController.abort();
+            }
+            const newChat = {
+                id: Date.now().toString(),
+                name: `Новый чат ${chats.length + 1}`,
+                messages: []
+            };
             chats.push(newChat);
             currentChatId = newChat.id;
             setGeneratingState(false);
@@ -717,7 +775,9 @@ HTML_TEMPLATE = """
 
         function deleteChat(id) {
             chats = chats.filter(c => c.id !== id);
-            if (currentChatId === id) currentChatId = chats[0].id;
+            if (currentChatId === id) {
+                currentChatId = chats[0].id;
+            }
             saveState();
         }
 
@@ -757,14 +817,26 @@ HTML_TEMPLATE = """
                 if (msg.role === 'user') {
                     const box = document.createElement('div');
                     box.className = 'msg-user';
-                    box.innerHTML = (msg.file ? `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>` : '') + escapeHtml(msg.text);
+                    let content = '';
+                    if (msg.file) {
+                        content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
+                    }
+                    content += escapeHtml(msg.text);
+                    box.innerHTML = content;
                     row.appendChild(box);
                 } else if (msg.role === 'cancelled') {
                     const container = document.createElement('div');
                     container.className = 'cancelled-container';
+                    
                     const box = document.createElement('div');
                     box.className = 'msg-user';
-                    box.innerHTML = (msg.file ? `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>` : '') + escapeHtml(msg.text);
+                    let content = '';
+                    if (msg.file) {
+                        content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
+                    }
+                    content += escapeHtml(msg.text);
+                    box.innerHTML = content;
+                    
                     container.appendChild(box);
                     
                     const line = document.createElement('div');
@@ -775,13 +847,19 @@ HTML_TEMPLATE = """
                     smallText.className = 'cancelled-text';
                     smallText.textContent = 'сообщение отменено';
                     container.appendChild(smallText);
+
                     row.appendChild(container);
                 } else {
                     const box = document.createElement('div');
                     box.className = 'msg-bot';
-                    box.innerHTML = msg.text.includes('<img') ? msg.text : marked.parse(msg.text);
+                    if (msg.text.includes('<img')) {
+                        box.innerHTML = msg.text;
+                    } else {
+                        box.innerHTML = marked.parse(msg.text);
+                    }
                     row.appendChild(box);
                 }
+
                 chatContainer.appendChild(row);
             });
             chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -824,8 +902,11 @@ HTML_TEMPLATE = """
         }
 
         function handleActionButton() {
-            if (isGenerating) cancelCurrentRequest();
-            else sendMessage();
+            if (isGenerating) {
+                cancelCurrentRequest();
+            } else {
+                sendMessage();
+            }
         }
 
         function cancelCurrentRequest() {
@@ -833,11 +914,15 @@ HTML_TEMPLATE = """
                 activeController.abort();
                 activeController = null;
             }
+
             const activeChat = chats.find(c => c.id === currentChatId);
             if (activeChat && activeChat.messages.length > 0) {
                 const lastMsg = activeChat.messages[activeChat.messages.length - 1];
-                if (lastMsg.role === 'user') lastMsg.role = 'cancelled';
+                if (lastMsg.role === 'user') {
+                    lastMsg.role = 'cancelled';
+                }
             }
+
             document.getElementById('temp-loader-row')?.remove();
             setGeneratingState(false);
             saveState();
@@ -846,20 +931,30 @@ HTML_TEMPLATE = """
         async function sendMessage() {
             const input = document.getElementById('prompt-input');
             const text = input.value.trim();
+            
             if (!text && !selectedFile) return;
 
             const activeChat = chats.find(c => c.id === currentChatId);
             if (!activeChat) return;
 
-            activeChat.messages.push({ role: 'user', text: text, file: selectedFile ? selectedFile.name : null });
+            const userMsg = {
+                role: 'user',
+                text: text,
+                file: selectedFile ? selectedFile.name : null
+            };
+
+            activeChat.messages.push(userMsg);
             if (activeChat.messages.length === 1 && text) {
                 activeChat.name = text.slice(0, 18) + (text.length > 18 ? '...' : '');
             }
+            
             renderMessages(activeChat.messages);
 
             const formData = new FormData();
             formData.append('prompt', text);
-            if (selectedFile) formData.append('file', selectedFile);
+            if (selectedFile) {
+                formData.append('file', selectedFile);
+            }
 
             input.value = '';
             removeSelectedFile();
@@ -869,14 +964,23 @@ HTML_TEMPLATE = """
             const botRow = document.createElement('div');
             botRow.className = 'msg-row bot-row';
             botRow.id = 'temp-loader-row';
-            botRow.innerHTML = `<div class="loader-box"><div class="spinner"></div><span>Думаю...</span></div>`;
+            botRow.innerHTML = `
+                <div class="loader-box">
+                    <div class="spinner"></div>
+                    <span>Думаю...</span>
+                </div>
+            `;
             chatContainer.appendChild(botRow);
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
             activeController = new AbortController();
 
             try {
-                const res = await fetch('/api/chat', { method: 'POST', body: formData, signal: activeController.signal });
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    body: formData,
+                    signal: activeController.signal
+                });
                 const data = await res.json();
 
                 document.getElementById('temp-loader-row')?.remove();
@@ -889,12 +993,15 @@ HTML_TEMPLATE = """
                     activeChat.messages.push({ role: 'bot', text: 'Ошибка: ' + (data.detail || 'Не удалось получить ответ.') });
                 }
             } catch (e) {
-                if (e.name === 'AbortError') return;
+                if (e.name === 'AbortError') {
+                    return;
+                }
                 document.getElementById('temp-loader-row')?.remove();
                 setGeneratingState(false);
                 activeController = null;
                 activeChat.messages.push({ role: 'bot', text: 'Ошибка подключения к серверу.' });
             }
+
             saveState();
         }
 
@@ -909,8 +1016,28 @@ HTML_TEMPLATE = """
 """
 
 @app.get("/", response_class=HTMLResponse)
-async def get_chat_ui():
-    return HTML_TEMPLATE
+async def get_chat_ui(request: Request):
+    user_email = request.cookies.get("user_email")
+    guest_count = int(request.cookies.get("guest_requests", "0"))
+    
+    # Формируем блок авторизации/лимитов в сайдбаре в зависимости от того, вошел ли пользователь
+    if user_email:
+        auth_block = f"""
+            <div style="font-size: 11px; color: #a855f7; word-break: break-all; margin-bottom: 4px;">👤 {user_email}</div>
+            <a href="/auth/logout" style="color: #f87171; font-size: 11px; text-decoration: none; margin-bottom: 6px; display: inline-block;">Выйти из аккаунта</a>
+        """
+    else:
+        left_limit = max(0, 10 - guest_count)
+        auth_block = f"""
+            <div style="font-size: 11px; color: #94a3b8; margin-bottom: 6px;">Бесплатно запросов: <b>{left_limit}/10</b></div>
+            <a href="/auth/google" class="btn-google-login">
+                <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.3 8.9 5 12 5z"/><path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"/><path fill="#FBBC05" d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.4 0 10.6 0 13s.6 4.6 1.6 6.6l3.7-2.9z"/><path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.3-6.7-5.3L1.6 15.6C3.5 19.4 7.4 23 12 23z"/></svg>
+                Войти через Google
+            </a>
+        """
+
+    rendered_html = HTML_TEMPLATE.replace("USER_AUTH_BLOCK", auth_block)
+    return rendered_html
 
 if __name__ == "__main__":
     import uvicorn
