@@ -1,11 +1,9 @@
 fastapi
 uvicorn
-aiogram
 sqlalchemy
 aiosqlite
 google-genai
-pydantic[email]
+pydantic
 python-multipart
 passlib[bcrypt]
 pyjwt
-email-validator
