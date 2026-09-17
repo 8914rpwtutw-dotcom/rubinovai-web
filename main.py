@@ -39,6 +39,15 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Безопасное добавление колонок, если таблица уже существовала в старом формате
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN requests_count INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN last_reset_date TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -240,6 +249,12 @@ def logout(request: Request):
     response.delete_cookie(key="user_email")
     return response
 
+@app.get("/api/status-check")
+def status_check(request: Request):
+    user_email = request.cookies.get("user_email")
+    status = get_user_status(user_email)
+    return {"status": status, "email": user_email}
+
 # --- API Админ-панели ---
 @app.get("/api/admin/users")
 def admin_get_users(request: Request):
@@ -303,17 +318,16 @@ async def chat_endpoint(
         if file:
             raise HTTPException(status_code=403, detail="Гости не могут отправлять файлы и фото. Войдите в аккаунт.")
     elif status == "free":
-        # Проверка суточного лимита 50 запросов для Free
+        if file:
+            raise HTTPException(status_code=403, detail="Отправка файлов и фото доступна только VIP-пользователям.")
+
         today = time.strftime("%Y-%m-%d")
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute("SELECT requests_count, last_reset_date FROM users WHERE email = ?", (user_email.lower(),))
         row = cursor.fetchone()
         
-        req_count = 0
-        last_date = ""
-        if row:
-            req_count, last_date = row[0], row[1]
+        req_count, last_date = (row[0], row[1]) if row else (0, "")
         
         if last_date != today:
             req_count = 0
@@ -322,11 +336,7 @@ async def chat_endpoint(
             
         if req_count >= 50:
             conn.close()
-            raise HTTPException(status_code=403, detail="Исчерпан дневной лимит (50 запросов) для Free аккаунта. Перейдите на VIP для безлимита.")
-        
-        if file:
-            conn.close()
-            raise HTTPException(status_code=403, detail="Отправка файлов и фото доступна только VIP-пользователям.")
+            raise HTTPException(status_code=403, detail="Исчерпан суточный лимит (50 запросов) для Free аккаунта. Перейдите на VIP для безлимита.")
             
         cursor.execute("UPDATE users SET requests_count = ? WHERE email = ?", (req_count + 1, user_email.lower()))
         conn.commit()
@@ -335,12 +345,8 @@ async def chat_endpoint(
     if not prompt.strip() and not file:
         raise HTTPException(status_code=400, detail="Запрос или файл обязателен")
     
-    file_bytes = None
-    mime_type = None
-    
-    if file:
-        file_bytes = await file.read()
-        mime_type = file.content_type
+    file_bytes = await file.read() if file else None
+    mime_type = file.content_type if file else None
 
     answer = get_gemini_response(prompt, file_bytes, mime_type)
     
@@ -367,7 +373,7 @@ HTML_TEMPLATE = """
     <style>
         :root {
             --bg-main: #040508;
-            --bg-sidebar: rgba(10, 12, 18, 0.65);
+            --bg-sidebar: rgba(10, 12, 18, 0.85);
             --card-bg: rgba(18, 21, 31, 0.5);
             --border-color: rgba(255, 255, 255, 0.08);
             --border-hover: rgba(168, 85, 247, 0.25);
@@ -479,75 +485,99 @@ HTML_TEMPLATE = """
         }
         .btn-admin-panel:hover { background: rgba(168, 85, 247, 0.25); color: #fff; }
 
+        .status-badge {
+            padding: 2px 6px; border-radius: 6px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; display: inline-block; margin-left: 4px;
+        }
+        .badge-vip { background: rgba(168, 85, 247, 0.25); color: #e9d5ff; border: 1px solid rgba(168,85,247,0.4); }
+        .badge-free { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.2); }
+        .badge-admin { background: rgba(234, 179, 8, 0.25); color: #fde047; border: 1px solid rgba(234,179,8,0.4); }
+
+        #banned-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
+            background: rgba(4, 5, 8, 0.95); backdrop-filter: blur(12px); z-index: 999;
+            align-items: center; justify-content: center; padding: 20px; text-align: center;
+        }
+        #banned-overlay.active { display: flex; }
+        .banned-box {
+            background: #11141d; border: 1px solid rgba(248, 113, 113, 0.4);
+            padding: 30px 24px; border-radius: 24px; max-width: 400px; width: 100%;
+            box-shadow: 0 20px 60px rgba(248, 113, 113, 0.2);
+        }
+        .banned-box h2 { color: #f87171; font-size: 20px; margin-bottom: 12px; }
+        .banned-box p { color: var(--text-muted); font-size: 13.5px; line-height: 1.5; margin-bottom: 20px; }
+
         #admin-modal {
             display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
             background: rgba(4, 5, 8, 0.85); backdrop-filter: blur(8px); z-index: 100;
-            align-items: center; justify-content: center; padding: 20px;
+            align-items: center; justify-content: center; padding: 10px;
         }
         #admin-modal.active { display: flex; }
         .admin-box {
             background: #0d1018; border: 1px solid rgba(168, 85, 247, 0.3);
-            border-radius: 20px; width: 100%; max-width: 750px; max-height: 85dvh;
+            border-radius: 20px; width: 100%; max-width: 750px; max-height: 90dvh;
             display: flex; flex-direction: column; overflow: hidden;
-            box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 30px rgba(168,85,247,0.15);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.8);
         }
         .admin-header {
-            padding: 16px 20px; border-bottom: 1px solid var(--border-color);
+            padding: 14px 18px; border-bottom: 1px solid var(--border-color);
             display: flex; justify-content: space-between; align-items: center;
             background: rgba(18, 21, 31, 0.8);
         }
-        .admin-header h3 { font-size: 15px; color: #fff; font-weight: 700; }
-        .admin-close { background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; }
+        .admin-header h3 { font-size: 14px; color: #fff; font-weight: 700; }
+        .admin-close { background: none; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; }
         .admin-close:hover { color: #f87171; }
         
         .admin-filters {
-            padding: 12px 20px; display: flex; gap: 8px; background: rgba(13, 16, 24, 0.9);
+            padding: 10px 14px; display: flex; gap: 6px; background: rgba(13, 16, 24, 0.9);
             border-bottom: 1px solid var(--border-color); flex-wrap: wrap;
         }
         .filter-btn {
             background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color);
-            color: var(--text-muted); padding: 6px 12px; border-radius: 8px; font-size: 11px;
+            color: var(--text-muted); padding: 5px 10px; border-radius: 8px; font-size: 11px;
             font-weight: 600; cursor: pointer; transition: all 0.2s;
         }
         .filter-btn.active { background: rgba(168, 85, 247, 0.2); border-color: rgba(168, 85, 247, 0.4); color: #fff; }
-        .filter-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
 
-        .admin-content { padding: 16px 20px; overflow-y: auto; flex: 1; }
-        .admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-        .admin-table th, .admin-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-color); color: #f1f5f9; }
+        .admin-content { padding: 10px 14px; overflow-y: auto; flex: 1; }
+        .admin-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+        .admin-table th, .admin-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border-color); color: #f1f5f9; }
         .admin-table th { color: var(--text-muted); font-weight: 600; background: rgba(255,255,255,0.02); }
         
-        .badge { padding: 4px 10px; border-radius: 6px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; display: inline-block; }
-        .badge-free { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.2); }
-        .badge-vip { background: rgba(168, 85, 247, 0.25); color: #e9d5ff; border: 1px solid rgba(168,85,247,0.4); }
-        .badge-banned { background: rgba(248, 113, 113, 0.25); color: #fca5a5; border: 1px solid rgba(248,113,113,0.4); }
+        .badge { padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; display: inline-block; }
+        .badge-free { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; }
+        .badge-vip { background: rgba(168, 85, 247, 0.25); color: #e9d5ff; }
+        .badge-banned { background: rgba(248, 113, 113, 0.25); color: #fca5a5; }
         
+        .admin-actions-cell { display: flex; gap: 6px; align-items: center; }
         .admin-actions-cell select {
             background: #1a1f2c; border: 1px solid rgba(168, 85, 247, 0.3);
-            color: #ffffff; padding: 6px 10px; border-radius: 8px; font-size: 11.5px; outline: none; cursor: pointer; font-weight: 600;
+            color: #ffffff; padding: 4px 6px; border-radius: 6px; font-size: 11px; outline: none; cursor: pointer;
         }
-        .admin-actions-cell select option { background: #0d1018; color: #fff; }
+        .btn-unban {
+            background: rgba(34, 197, 94, 0.2); border: 1px solid rgba(34, 197, 94, 0.4);
+            color: #86efac; padding: 4px 8px; border-radius: 6px; font-size: 10.5px; font-weight: 600; cursor: pointer;
+        }
+        .btn-unban:hover { background: rgba(34, 197, 94, 0.35); }
 
         #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100dvh; overflow: hidden; z-index: 1; }
         
         #chat-header { 
             height: 60px; min-height: 60px; border-bottom: 1px solid var(--border-color); 
             display: flex; align-items: center; justify-content: space-between; 
-            padding: 0 24px; background: rgba(4, 5, 8, 0.5); backdrop-filter: blur(16px); z-index: 10;
+            padding: 0 20px; background: rgba(4, 5, 8, 0.5); backdrop-filter: blur(16px); z-index: 10;
         }
-        .header-left { display: flex; align-items: center; gap: 14px; }
+        .header-left { display: flex; align-items: center; gap: 12px; }
         
         .menu-toggle { 
             background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); 
             color: #ffffff; border-radius: 12px; padding: 8px; cursor: pointer; 
-            display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;
+            display: flex; align-items: center; justify-content: center;
         }
-        .menu-toggle:hover { background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.3); }
-        #chat-header h3 { font-size: 14px; font-weight: 600; color: #ffffff; letter-spacing: -0.2px; }
+        #chat-header h3 { font-size: 14px; font-weight: 600; color: #ffffff; }
 
         #chat-container { 
-            flex: 1; overflow-y: auto; padding: 24px 24px 140px 24px; 
-            display: flex; flex-direction: column; gap: 22px; 
+            flex: 1; overflow-y: auto; padding: 20px 20px 140px 20px; 
+            display: flex; flex-direction: column; gap: 20px; 
             max-width: 900px; width: 100%; margin: 0 auto; position: relative; z-index: 2;
         }
 
@@ -555,126 +585,101 @@ HTML_TEMPLATE = """
             position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%);
             text-align: center; user-select: none; pointer-events: none; width: 90%; max-width: 480px;
             display: flex; flex-direction: column; align-items: center; gap: 16px;
-            animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
         }
         .welcome-avatar-glow {
-            position: relative; padding: 20px; border-radius: 28px;
+            padding: 20px; border-radius: 28px;
             background: rgba(168, 85, 247, 0.04); border: 1px solid rgba(168, 85, 247, 0.15);
-            box-shadow: 0 0 50px rgba(168, 85, 247, 0.12); margin-bottom: 4px;
+            box-shadow: 0 0 50px rgba(168, 85, 247, 0.12);
         }
         .welcome-avatar-svg { width: 60px; height: 60px; filter: drop-shadow(0 0 18px rgba(168, 85, 247, 0.6)); }
-        .welcome-screen h1 { font-size: 24px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; }
-        .welcome-screen p { font-size: 13.5px; color: var(--text-muted); line-height: 1.6; }
+        .welcome-screen h1 { font-size: 22px; font-weight: 700; color: #ffffff; }
+        .welcome-screen p { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
         
-        .msg-row { display: flex; flex-direction: column; width: 100%; animation: messageIn 0.35s cubic-bezier(0.16, 1, 0.3, 1); z-index: 2; }
+        .msg-row { display: flex; flex-direction: column; width: 100%; z-index: 2; }
         .msg-row.user-row { align-items: flex-end; }
         .msg-row.bot-row { align-items: flex-start; }
-
-        @keyframes messageIn { from { opacity: 0; transform: translateY(12px) scale(0.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
-        @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -46%); } to { opacity: 1; transform: translate(-50%, -50%); } }
 
         .msg-user { 
             background: var(--user-msg-bg); color: #ffffff; 
             border: 1px solid rgba(168, 85, 247, 0.22); border-radius: 18px 18px 4px 18px; 
-            padding: 13px 18px; font-size: 13.5px; line-height: 1.55; max-width: 85%; 
-            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.12); word-break: break-word; backdrop-filter: blur(12px);
+            padding: 12px 16px; font-size: 13px; line-height: 1.5; max-width: 85%; word-break: break-word; 
         }
-        
         .msg-bot { 
             background: var(--bot-msg-bg); border: 1px solid var(--border-color); 
             color: #e2e8f0; border-radius: 18px 18px 18px 4px; 
-            padding: 18px 22px; font-size: 13.5px; line-height: 1.65; max-width: 90%; 
-            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35); word-break: break-word; backdrop-filter: blur(20px);
+            padding: 16px 20px; font-size: 13px; line-height: 1.6; max-width: 90%; word-break: break-word; 
         }
-
-        .msg-bot p { margin-bottom: 12px; }
-        .msg-bot p:last-child { margin-bottom: 0; }
-        .msg-bot strong { color: #ffffff; font-weight: 700; }
-        .msg-bot ul, .msg-bot ol { margin: 8px 0 12px 20px; }
-        .msg-bot code { background: rgba(255, 255, 255, 0.06); padding: 3px 7px; border-radius: 6px; font-family: monospace; font-size: 12px; color: #f472b6; border: 1px solid rgba(255,255,255,0.04); }
-        .msg-bot pre { background: #020305; padding: 14px; border-radius: 12px; overflow-x: auto; margin: 12px 0; border: 1px solid var(--border-color); }
+        .msg-bot code { background: rgba(255, 255, 255, 0.06); padding: 2px 6px; border-radius: 6px; font-family: monospace; font-size: 11.5px; color: #f472b6; }
+        .msg-bot pre { background: #020305; padding: 12px; border-radius: 10px; overflow-x: auto; margin: 10px 0; border: 1px solid var(--border-color); }
         
-        .file-preview-tag { display: inline-flex; align-items: center; gap: 6px; background: rgba(168, 85, 247, 0.15); padding: 5px 10px; border-radius: 8px; font-size: 11px; margin-bottom: 8px; border: 1px solid rgba(168, 85, 247, 0.3); color: #d8b4fe; }
-
-        .cancelled-container { display: flex; flex-direction: column; align-items: flex-end; width: 100%; animation: messageIn 0.2s ease-out; }
-        .cancelled-line { width: 100%; max-width: 85%; height: 1px; background: rgba(255, 255, 255, 0.06); margin: 8px 0 4px 0; }
-        .cancelled-text { font-size: 10px; color: var(--text-muted); font-style: italic; letter-spacing: 0.3px; padding-right: 4px; }
+        .file-preview-tag { display: inline-flex; align-items: center; gap: 6px; background: rgba(168, 85, 247, 0.15); padding: 4px 8px; border-radius: 8px; font-size: 11px; margin-bottom: 6px; color: #d8b4fe; }
 
         .loader-box {
             display: flex; align-items: center; gap: 12px; background: var(--bot-msg-bg);
             border: 1px solid var(--border-color); border-radius: 18px 18px 18px 4px;
-            padding: 14px 20px; font-size: 13.5px; color: var(--text-muted); backdrop-filter: blur(20px);
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+            padding: 12px 18px; font-size: 13px; color: var(--text-muted);
         }
         .spinner {
-            width: 16px; height: 16px; border: 2px solid rgba(168,85,247,0.2);
+            width: 14px; height: 14px; border: 2px solid rgba(168,85,247,0.2);
             border-top-color: #a855f7; border-radius: 50%; animation: spin 0.8s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
         #input-wrapper {
             position: absolute; bottom: 0; left: 0; right: 0; 
-            padding: 16px 24px; padding-bottom: calc(16px + env(safe-area-inset-bottom));
+            padding: 14px 20px; padding-bottom: calc(14px + env(safe-area-inset-bottom));
             background: linear-gradient(180deg, rgba(4, 5, 8, 0) 0%, rgba(4, 5, 8, 0.85) 40%, var(--bg-main) 100%);
             z-index: 20;
         }
 
         #input-container { 
-            max-width: 900px; margin: 0 auto; background: rgba(13, 16, 24, 0.8); 
-            backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
-            border: 1px solid rgba(168, 85, 247, 0.18); border-radius: 20px; 
-            padding: 8px 12px; display: flex; flex-direction: column; gap: 8px;
-            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 25px rgba(168, 85, 247, 0.06);
-            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-        #input-container:focus-within {
-            border-color: rgba(168, 85, 247, 0.45);
-            box-shadow: 0 14px 45px rgba(0, 0, 0, 0.7), 0 0 30px rgba(168, 85, 247, 0.15);
+            max-width: 900px; margin: 0 auto; background: rgba(13, 16, 24, 0.85); 
+            backdrop-filter: blur(24px); border: 1px solid rgba(168, 85, 247, 0.18); border-radius: 18px; 
+            padding: 6px 10px; display: flex; flex-direction: column; gap: 6px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
         }
 
-        #file-info-bar { display: none; align-items: center; justify-content: space-between; background: rgba(168, 85, 247, 0.12); padding: 6px 12px; border-radius: 10px; font-size: 11.5px; color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.25); }
-        #file-info-bar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80%; }
-        #file-info-bar button { background: none; border: none; color: #f87171; cursor: pointer; font-size: 14px; transition: transform 0.2s; }
-        #file-info-bar button:hover { transform: scale(1.15); }
+        #file-info-bar { display: none; align-items: center; justify-content: space-between; background: rgba(168, 85, 247, 0.12); padding: 5px 10px; border-radius: 8px; font-size: 11px; color: #d8b4fe; }
+        #file-info-bar button { background: none; border: none; color: #f87171; cursor: pointer; font-size: 13px; }
 
-        .input-row { display: flex; gap: 8px; align-items: center; width: 100%; }
+        .input-row { display: flex; gap: 6px; align-items: center; width: 100%; }
 
         .mini-btn { 
             background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); 
-            color: var(--text-muted); padding: 10px; border-radius: 12px; cursor: pointer; 
-            display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; 
+            color: var(--text-muted); padding: 8px; border-radius: 10px; cursor: pointer; 
+            display: flex; align-items: center; justify-content: center; 
         }
-        .mini-btn:hover { color: #ffffff; background: rgba(168, 85, 247, 0.12); border-color: rgba(168, 85, 247, 0.3); transform: translateY(-1px); }
 
-        #prompt-input { flex: 1; background: transparent; border: none; color: #ffffff; font-size: 14px; outline: none; min-width: 0; padding: 6px 4px; }
+        #prompt-input { flex: 1; background: transparent; border: none; color: #ffffff; font-size: 13.5px; outline: none; min-width: 0; padding: 4px; }
         #prompt-input::placeholder { color: var(--text-muted); }
-        #prompt-input:disabled { opacity: 0.5; }
         
         .btn-action { 
-            background: var(--accent-gradient); color: #ffffff; border: none; border-radius: 12px; 
-            padding: 11px 20px; font-size: 12.5px; font-weight: 600; cursor: pointer; 
-            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); flex-shrink: 0; display: flex; align-items: center; justify-content: center; min-width: 100px;
-            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
+            background: var(--accent-gradient); color: #ffffff; border: none; border-radius: 10px; 
+            padding: 10px 16px; font-size: 12px; font-weight: 600; cursor: pointer; 
+            flex-shrink: 0; display: flex; align-items: center; justify-content: center; min-width: 90px;
         }
-        .btn-action:hover { transform: translateY(-1px); box-shadow: 0 6px 25px rgba(168, 85, 247, 0.45); }
-        
-        .btn-action.cancel-mode {
-            background: var(--cancel-bg); border: 1px solid var(--cancel-border);
-            color: var(--cancel-color); box-shadow: 0 4px 20px rgba(248, 113, 113, 0.15);
-        }
-        .btn-action.cancel-mode:hover { background: rgba(248, 113, 113, 0.22); }
+        .btn-action.cancel-mode { background: var(--cancel-bg); border: 1px solid var(--cancel-border); color: var(--cancel-color); }
 
         @media (max-width: 768px) {
             #sidebar { position: fixed; top: 0; left: 0; margin-left: 0 !important; transform: translateX(-100%); }
             #sidebar.mobile-open { transform: translateX(0); }
-            #chat-header { padding: 0 16px; }
-            #chat-container { padding: 16px 16px 120px 16px; }
-            #input-wrapper { padding: 12px 16px; }
+            #chat-header { padding: 0 14px; }
+            #chat-container { padding: 14px 14px 110px 14px; }
+            #input-wrapper { padding: 10px 14px; }
+            .admin-box { max-height: 95dvh; margin: 5px; }
         }
     </style>
 </head>
 <body>
     <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <div id="banned-overlay">
+        <div class="banned-box">
+            <h2>🚫 Аккаунт заблокирован</h2>
+            <p>Ваш аккаунт был заблокирован администратором. Доступ к нейросети приостановлен.</p>
+            <a href="/auth/logout" style="background: rgba(248,113,113,0.2); border: 1px solid rgba(248,113,113,0.4); color: #f87171; padding: 8px 16px; border-radius: 10px; font-size: 12px; text-decoration: none; font-weight: 600; display: inline-block;">Выйти из аккаунта</a>
+        </div>
+    </div>
 
     <div id="admin-modal" onclick="closeAdminModal(event)">
         <div class="admin-box" onclick="event.stopPropagation()">
@@ -683,7 +688,7 @@ HTML_TEMPLATE = """
                 <button class="admin-close" onclick="toggleAdminModal(false)">×</button>
             </div>
             <div class="admin-filters">
-                <button class="filter-btn active" onclick="filterAdminUsers('all', this)">Все пользователи</button>
+                <button class="filter-btn active" onclick="filterAdminUsers('all', this)">Все</button>
                 <button class="filter-btn" onclick="filterAdminUsers('vip', this)">⚡ VIP</button>
                 <button class="filter-btn" onclick="filterAdminUsers('free', this)">👤 Free</button>
                 <button class="filter-btn" onclick="filterAdminUsers('banned', this)">🚫 Забаненные</button>
@@ -694,7 +699,7 @@ HTML_TEMPLATE = """
                         <tr>
                             <th>Email</th>
                             <th>Статус</th>
-                            <th>Запросов сегодня</th>
+                            <th>Запросы</th>
                             <th>Действие</th>
                         </tr>
                     </thead>
@@ -709,21 +714,13 @@ HTML_TEMPLATE = """
     <div id="sidebar">
         <div class="brand">
             <svg class="brand-logo-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                    <linearGradient id="rubyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stop-color="#ff4b4b" />
-                        <stop offset="100%" stop-color="#900c3f" />
-                    </linearGradient>
-                </defs>
+                <defs><linearGradient id="rubyGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4b4b" /><stop offset="100%" stop-color="#900c3f" /></linearGradient></defs>
                 <path d="M50 10 L85 35 L50 90 L15 35 Z" stroke="url(#rubyGrad)" stroke-width="4" fill="none" />
                 <path d="M15 35 L85 35 M50 10 L32 35 M50 10 L68 35 M50 90 L32 35 M50 90 L68 35" stroke="url(#rubyGrad)" stroke-width="2.5" opacity="0.7" />
                 <circle cx="50" cy="48" r="14" fill="#ff4b4b" opacity="0.25" />
                 <path d="M42 45 Q46 40 50 45 Q54 40 58 45 Q60 52 50 56 Q40 52 42 45 Z" stroke="#ffffff" stroke-width="2.5" fill="none" />
             </svg>
-            <div>
-                <h2>Rubinov AI</h2>
-                <span>Assistant</span>
-            </div>
+            <div><h2>Rubinov AI</h2><span>Assistant</span></div>
         </div>
 
         <button class="btn-new-chat" onclick="createNewChat()">
@@ -731,20 +728,12 @@ HTML_TEMPLATE = """
             Новый диалог
         </button>
 
-        <div class="chats-header">
-            <span>Чаты (<span id="chat-count">1</span>/5)</span>
-        </div>
-
+        <div class="chats-header"><span>Чаты (<span id="chat-count">1</span>/5)</span></div>
         <div id="chats-list"></div>
 
         <div class="sidebar-footer">
             USER_AUTH_BLOCK
-            <div class="footer-info">
-                <div class="footer-left-status">
-                    <span class="status-dot"></span>
-                    <span>Online</span>
-                </div>
-            </div>
+            <div class="footer-info"><div style="display:flex; align-items:center; gap:8px;"><span class="status-dot"></span><span>Online</span></div></div>
         </div>
     </div>
 
@@ -768,17 +757,13 @@ HTML_TEMPLATE = """
                 </div>
                 <div class="input-row">
                     <input type="file" id="file-input" accept="image/*" capture="environment" style="display: none;" onchange="handleFileSelect(event)" />
-                    
-                    <button class="mini-btn" onclick="document.getElementById('file-input').click()" title="Прикрепить фото">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                    <button class="mini-btn" onclick="checkFilePermissionAndOpen()" title="Прикрепить фото">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                     </button>
-
                     <button class="mini-btn" onclick="triggerImageGenerationPrompt()" title="Сгенерировать картинку">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                     </button>
-
-                    <input type="text" id="prompt-input" placeholder="Введите сообщение или опишите картинку..." onkeydown="handleKeyPress(event)" />
-                    
+                    <input type="text" id="prompt-input" placeholder="Введите сообщение..." onkeydown="handleKeyPress(event)" />
                     <button class="btn-action" id="action-btn" onclick="handleActionButton()">Отправить</button>
                 </div>
             </div>
@@ -793,6 +778,24 @@ HTML_TEMPLATE = """
         let isGenerating = false;
         let allUsersCache = [];
         let currentFilter = 'all';
+        let myCurrentStatus = 'guest';
+
+        async function checkUserStatusRealtime() {
+            try {
+                const res = await fetch('/api/status-check');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.status === 'banned') {
+                        document.getElementById('banned-overlay').classList.add('active');
+                    } else if (myCurrentStatus !== 'guest' && myCurrentStatus !== data.status && myCurrentStatus !== 'unknown') {
+                        location.reload();
+                    }
+                    myCurrentStatus = data.status;
+                }
+            } catch(e) {}
+        }
+        setInterval(checkUserStatusRealtime, 8000);
+        checkUserStatusRealtime();
 
         if (chats.length === 0) {
             const initialChat = { id: Date.now().toString(), name: 'Новый чат 1', messages: [] };
@@ -810,12 +813,9 @@ HTML_TEMPLATE = """
         }
 
         function toggleSidebar() {
-            const width = window.innerWidth;
-            if (width <= 768) {
-                const sidebar = document.getElementById('sidebar');
-                const overlay = document.getElementById('sidebar-overlay');
-                sidebar.classList.toggle('mobile-open');
-                overlay.classList.toggle('active');
+            if (window.innerWidth <= 768) {
+                document.getElementById('sidebar').classList.toggle('mobile-open');
+                document.getElementById('sidebar-overlay').classList.toggle('active');
             } else {
                 document.body.classList.toggle('sidebar-collapsed');
             }
@@ -832,9 +832,7 @@ HTML_TEMPLATE = """
         }
 
         function closeAdminModal(e) {
-            if (e.target.id === 'admin-modal') {
-                toggleAdminModal(false);
-            }
+            if (e.target.id === 'admin-modal') toggleAdminModal(false);
         }
 
         async function loadAdminUsers() {
@@ -842,12 +840,12 @@ HTML_TEMPLATE = """
             tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Загрузка...</td></tr>';
             try {
                 const res = await fetch('/api/admin/users');
-                if (!res.ok) throw new Error('Ошибка доступа');
+                if (!res.ok) throw new Error();
                 const data = await res.json();
                 allUsersCache = data.users;
                 renderUsersTable();
             } catch (err) {
-                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#f87171;">Не удалось загрузить список пользователей.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#f87171;">Ошибка загрузки.</td></tr>';
             }
         }
 
@@ -870,23 +868,30 @@ HTML_TEMPLATE = """
             });
 
             if (filtered.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Пользователей в этой категории нет.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Нет пользователей.</td></tr>';
                 return;
             }
 
             filtered.forEach(u => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td style="word-break:break-all;">${escapeHtml(u.email)}</td>
-                    <td><span class="badge badge-${u.status}">${u.status}</span></td>
-                    <td><b>${u.requests_count || 0}</b> / 50</td>
-                    <td class="admin-actions-cell">
+                let actionHtml = '';
+                if (u.status === 'banned') {
+                    actionHtml = `<button class="btn-unban" onclick="updateUserStatus('${u.email}', 'free')">Разбанить</button>`;
+                } else {
+                    actionHtml = `
                         <select onchange="updateUserStatus('${u.email}', this.value)">
                             <option value="free" ${u.status === 'free' ? 'selected' : ''}>Free</option>
                             <option value="vip" ${u.status === 'vip' ? 'selected' : ''}>VIP</option>
                             <option value="banned" ${u.status === 'banned' ? 'selected' : ''}>Ban</option>
                         </select>
-                    </td>
+                    `;
+                }
+
+                tr.innerHTML = `
+                    <td style="word-break:break-all;">${escapeHtml(u.email)}</td>
+                    <td><span class="badge badge-${u.status}">${u.status}</span></td>
+                    <td><b>${u.requests_count || 0}</b></td>
+                    <td class="admin-actions-cell">${actionHtml}</td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -900,13 +905,21 @@ HTML_TEMPLATE = """
                     body: JSON.stringify({ email, status })
                 });
                 if (!res.ok) {
-                    const errData = await res.json();
-                    alert(errData.detail || 'Ошибка при изменении статуса');
+                    const err = await res.json();
+                    alert(err.detail || 'Ошибка');
                 }
                 loadAdminUsers();
             } catch (e) {
-                alert('Ошибка соединения с сервером');
+                alert('Ошибка соединения');
             }
+        }
+
+        function checkFilePermissionAndOpen() {
+            if (myCurrentStatus === 'free' || myCurrentStatus === 'guest') {
+                alert('🔒 Отправка файлов и фото доступна только VIP-пользователям.');
+                return;
+            }
+            document.getElementById('file-input').click();
         }
 
         function renderChats() {
@@ -918,7 +931,6 @@ HTML_TEMPLATE = """
                 const item = document.createElement('div');
                 item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
                 item.onclick = () => switchChat(chat.id);
-
                 item.innerHTML = `
                     <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px;">${escapeHtml(chat.name)}</span>
                     ${chats.length > 1 ? `<span class="close-btn" onclick="event.stopPropagation(); deleteChat('${chat.id}')">×</span>` : ''}
@@ -947,11 +959,7 @@ HTML_TEMPLATE = """
                 return;
             }
             if (activeController) activeController.abort();
-            const newChat = {
-                id: Date.now().toString(),
-                name: `Новый чат ${chats.length + 1}`,
-                messages: []
-            };
+            const newChat = { id: Date.now().toString(), name: `Новый чат ${chats.length + 1}`, messages: [] };
             chats.push(newChat);
             currentChatId = newChat.id;
             setGeneratingState(false);
@@ -1006,26 +1014,6 @@ HTML_TEMPLATE = """
                     content += escapeHtml(msg.text);
                     box.innerHTML = content;
                     row.appendChild(box);
-                } else if (msg.role === 'cancelled') {
-                    const container = document.createElement('div');
-                    container.className = 'cancelled-container';
-                    const box = document.createElement('div');
-                    box.className = 'msg-user';
-                    let content = '';
-                    if (msg.file) content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
-                    content += escapeHtml(msg.text);
-                    box.innerHTML = content;
-                    container.appendChild(box);
-                    
-                    const line = document.createElement('div');
-                    line.className = 'cancelled-line';
-                    container.appendChild(line);
-
-                    const smallText = document.createElement('div');
-                    smallText.className = 'cancelled-text';
-                    smallText.textContent = 'сообщение отменено';
-                    container.appendChild(smallText);
-                    row.appendChild(container);
                 } else {
                     const box = document.createElement('div');
                     box.className = 'msg-bot';
@@ -1033,7 +1021,6 @@ HTML_TEMPLATE = """
                     else box.innerHTML = marked.parse(msg.text);
                     row.appendChild(box);
                 }
-
                 chatContainer.appendChild(row);
             });
             chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -1085,14 +1072,8 @@ HTML_TEMPLATE = """
                 activeController.abort();
                 activeController = null;
             }
-            const activeChat = chats.find(c => c.id === currentChatId);
-            if (activeChat && activeChat.messages.length > 0) {
-                const lastMsg = activeChat.messages[activeChat.messages.length - 1];
-                if (lastMsg.role === 'user') lastMsg.role = 'cancelled';
-            }
             document.getElementById('temp-loader-row')?.remove();
             setGeneratingState(false);
-            saveState();
         }
 
         async function sendMessage() {
@@ -1103,12 +1084,10 @@ HTML_TEMPLATE = """
             const activeChat = chats.find(c => c.id === currentChatId);
             if (!activeChat) return;
 
-            const userMsg = { role: 'user', text: text, file: selectedFile ? selectedFile.name : null };
-            activeChat.messages.push(userMsg);
+            activeChat.messages.push({ role: 'user', text: text, file: selectedFile ? selectedFile.name : null });
             if (activeChat.messages.length === 1 && text) {
                 activeChat.name = text.slice(0, 18) + (text.length > 18 ? '...' : '');
             }
-            
             renderMessages(activeChat.messages);
 
             const formData = new FormData();
@@ -1123,23 +1102,14 @@ HTML_TEMPLATE = """
             const botRow = document.createElement('div');
             botRow.className = 'msg-row bot-row';
             botRow.id = 'temp-loader-row';
-            botRow.innerHTML = `
-                <div class="loader-box">
-                    <div class="spinner"></div>
-                    <span>Думаю...</span>
-                </div>
-            `;
+            botRow.innerHTML = `<div class="loader-box"><div class="spinner"></div><span>Думаю...</span></div>`;
             chatContainer.appendChild(botRow);
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
             activeController = new AbortController();
 
             try {
-                const res = await fetch('/api/chat', {
-                    method: 'POST',
-                    body: formData,
-                    signal: activeController.signal
-                });
+                const res = await fetch('/api/chat', { method: 'POST', body: formData, signal: activeController.signal });
                 const data = await res.json();
 
                 document.getElementById('temp-loader-row')?.remove();
@@ -1158,7 +1128,6 @@ HTML_TEMPLATE = """
                 activeController = null;
                 activeChat.messages.push({ role: 'bot', text: 'Ошибка подключения к серверу.' });
             }
-
             saveState();
         }
 
@@ -1179,9 +1148,13 @@ async def get_chat_ui(request: Request):
     
     if user_email:
         admin_btn_html = f"""<button class="btn-admin-panel" onclick="toggleAdminModal(true)">👑 Админ-панель</button>""" if status == "admin" else ""
+        badge_html = f"""<span class="status-badge badge-{status if status != 'admin' else 'admin'}">{status.upper()}</span>"""
+
         auth_block = f"""
             {admin_btn_html}
-            <div style="font-size: 11px; color: #a855f7; word-break: break-all; margin-bottom: 4px;">👤 {user_email} ({status.upper()})</div>
+            <div style="font-size: 11px; color: #cbd5e1; word-break: break-all; margin-bottom: 4px; display:flex; align-items:center; gap:4px; flex-wrap:wrap;">
+                <span>👤 {user_email}</span> {badge_html}
+            </div>
             <a href="/auth/logout" style="color: #f87171; font-size: 11px; text-decoration: none; margin-bottom: 6px; display: inline-block;">Выйти из аккаунта</a>
         """
     else:
@@ -1190,13 +1163,12 @@ async def get_chat_ui(request: Request):
         auth_block = f"""
             <div style="font-size: 11px; color: #94a3b8; margin-bottom: 6px;">Гостевых запросов: <b>{left_limit}/10</b></div>
             <a href="/auth/google" class="btn-google-login">
-                <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.3 8.9 5 12 5z"/><path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"/><path fill="#FBBC05" d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.4 0 10.6 0 13s.6 4.6 1.6 6.6l3.7-2.9z"/><path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.3-6.7-5.3L1.6 15.6C3.5 19.4 7.4 23 12 23 z"/></svg>
+                <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.3 8.9 5 12 5z"/><path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"/><path fill="#FBBC05" d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.4 0 10.6 0 13s.6 4.6 1.6 6.6l3.7-2.9z"/><path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.3-6.7-5.3L1.6 15.6C3.5 19.4 7.4 23 12 23z"/></svg>
                 Войти через Google
             </a>
         """
 
-    rendered_html = HTML_TEMPLATE.replace("USER_AUTH_BLOCK", auth_block)
-    return rendered_html
+    return HTML_TEMPLATE.replace("USER_AUTH_BLOCK", auth_block)
 
 if __name__ == "__main__":
     import uvicorn
