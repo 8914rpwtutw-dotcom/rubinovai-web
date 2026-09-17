@@ -10,3 +10,4 @@ pyjwt
 httpx
 requests
 itsdangerous
+psycopg2-binary
