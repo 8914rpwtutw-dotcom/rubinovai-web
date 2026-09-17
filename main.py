@@ -42,6 +42,17 @@ def get_db_connection():
         raise HTTPException(status_code=500, detail="DATABASE_URL не настроена в Environment Variables.")
     return psycopg2.connect(DATABASE_URL)
 
+# Список всех главных администраторов
+DEFAULT_ADMINS = [
+    "8914rpwtutw@gmail.com",
+    "egrandr123123@gmail.com",
+    "gorvov2003@gmail.com"
+]
+
+# Дополнительно подтягиваем админов из переменной Render (если они там указаны через запятую)
+env_admins = [e.strip().lower() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
+ADMIN_EMAILS = list(set([e.lower() for e in DEFAULT_ADMINS] + env_admins))
+
 def init_db():
     try:
         conn = get_db_connection()
@@ -56,13 +67,13 @@ def init_db():
             )
         """)
         
-        # Автоматическое создание/восстановление главного администратора
-        admin_mail = os.getenv("ADMIN_EMAIL", "8914rpwtutw@gmail.com").lower()
-        cursor.execute("""
-            INSERT INTO users (email, status) 
-            VALUES (%s, 'vip') 
-            ON CONFLICT (email) DO NOTHING
-        """, (admin_mail,))
+        # Автоматическое добавление/восстановление всех администраторов при старте
+        for admin_mail in ADMIN_EMAILS:
+            cursor.execute("""
+                INSERT INTO users (email, status) 
+                VALUES (%s, 'admin') 
+                ON CONFLICT (email) DO UPDATE SET status = 'admin'
+            """, (admin_mail,))
         
         conn.commit()
         cursor.close()
@@ -72,12 +83,12 @@ def init_db():
 
 init_db()
 
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "8914rpwtutw@gmail.com")
-
 def get_user_status(email: str) -> str:
     if not email:
         return "guest"
-    if email.lower() == ADMIN_EMAIL.lower():
+    
+    # Проверка на администратора
+    if email.lower() in ADMIN_EMAILS:
         return "admin"
     
     conn = get_db_connection()
@@ -96,6 +107,7 @@ def get_user_status(email: str) -> str:
     conn.close()
     return "free"
 
+# Актуальная линейка моделей Google Gemini
 MODELS = ["gemini-3.1-flash-lite", "gemini-2.5-flash"]
 current_key_idx = 0
 current_model_idx = 0
@@ -277,7 +289,7 @@ async def admin_update_status(request: Request):
     if new_status not in ["free", "vip", "banned"]:
         raise HTTPException(status_code=400, detail="Неверный статус")
     
-    if target_email.lower() == ADMIN_EMAIL.lower():
+    if target_email.lower() in ADMIN_EMAILS:
         raise HTTPException(status_code=400, detail="Нельзя изменить статус главного администратора")
 
     conn = get_db_connection()
@@ -527,7 +539,8 @@ HTML_TEMPLATE = """
         .badge-free { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; }
         .badge-vip { background: rgba(168, 85, 247, 0.25); color: #e9d5ff; }
         .badge-banned { background: rgba(248, 113, 113, 0.25); color: #fca5a5; }
-        
+        .badge-admin { background: rgba(234, 179, 8, 0.25); color: #fde047; }
+
         .admin-actions-cell { display: flex; gap: 6px; align-items: center; }
         .admin-actions-cell select {
             background: #1a1f2c; border: 1px solid rgba(168, 85, 247, 0.3); color: #ffffff;
@@ -841,6 +854,8 @@ HTML_TEMPLATE = """
                 let actionHtml = '';
                 if (u.status === 'banned') {
                     actionHtml = `<button class="btn-unban" onclick="updateUserStatus('${u.email}', 'free')">Разбанить</button>`;
+                } else if (u.status === 'admin') {
+                    actionHtml = `<span style="color:#fde047; font-weight:bold;">👑 Главный админ</span>`;
                 } else {
                     actionHtml = `
                         <select onchange="updateUserStatus('${u.email}', this.value)">
