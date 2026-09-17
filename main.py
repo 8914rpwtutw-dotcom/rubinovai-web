@@ -1,16 +1,21 @@
 import os
 import json
 import time
+import sqlite3
 from typing import Optional
 from fastapi import FastAPI, HTTPException, File, Form, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 import httpx
 
 app = FastAPI()
+
+# Поддержка HTTPS заголовков прокси Render
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,15 +24,62 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+# --- Настройка базы данных пользователей (SQLite) ---
+DB_FILE = "rubinov_users.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            email TEXT PRIMARY KEY,
+            status TEXT DEFAULT 'free', -- 'free', 'vip', 'banned'
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# Твой административный email
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "8914rpwtutw@gmail.com")
+
+def get_user_status(email: str) -> str:
+    if not email:
+        return "guest"
+    if email.lower() == ADMIN_EMAIL.lower():
+        return "admin"
+    
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT status FROM users WHERE email = ?", (email.lower(),))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        return row[0] # 'free', 'vip', 'banned'
+    
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO users (email, status) VALUES (?, 'free')", (email.lower(),))
+    conn.commit()
+    conn.close()
+    return "free"
+
 MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro"]
 
 current_key_idx = 0
 current_model_idx = 0
 
-# Настройки Google OAuth
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://rubinovai-web.onrender.com/auth/google/callback")
+
+def get_redirect_uri(request: Request) -> str:
+    env_uri = os.getenv("REDIRECT_URI") or os.getenv("GOOGLE_REDIRECT_URI")
+    if env_uri:
+        return env_uri
+    return str(request.url_for("auth_google_callback"))
 
 def get_api_keys():
     keys = [
@@ -117,33 +169,43 @@ def health_check():
 
 # --- Маршруты Google OAuth ---
 @app.get("/auth/google")
-def login_google():
+def login_google(request: Request):
     if not GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID не настроен")
+    
+    current_redirect_uri = get_redirect_uri(request)
+    
     google_auth_url = (
         f"https://accounts.google.com/o/oauth2/v2/auth?"
         f"client_id={GOOGLE_CLIENT_ID}&"
-        f"redirect_uri={REDIRECT_URI}&"
+        f"redirect_uri={current_redirect_uri}&"
         f"response_type=code&"
         f"scope=openid%20email%20profile"
     )
     return RedirectResponse(google_auth_url)
 
 @app.get("/auth/google/callback")
-async def auth_google_callback(code: str):
+async def auth_google_callback(request: Request, code: Optional[str] = None, error: Optional[str] = None):
+    if error:
+        raise HTTPException(status_code=400, detail=f"Google вернул ошибку: {error}")
+    if not code:
+        raise HTTPException(status_code=400, detail="Код авторизации (code) не получен от Google.")
+
     token_url = "https://oauth2.googleapis.com/token"
+    current_redirect_uri = get_redirect_uri(request)
+    
     payload = {
         "code": code,
         "client_id": GOOGLE_CLIENT_ID,
         "client_secret": GOOGLE_CLIENT_SECRET,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": current_redirect_uri,
         "grant_type": "authorization_code",
     }
     
     async with httpx.AsyncClient() as client:
         token_res = await client.post(token_url, data=payload)
         if token_res.status_code != 200:
-            raise HTTPException(status_code=400, detail="Ошибка авторизации Google")
+            raise HTTPException(status_code=400, detail=f"Ошибка обмена токена с Google: {token_res.text}")
         
         token_data = token_res.json()
         access_token = token_data.get("access_token")
@@ -158,16 +220,66 @@ async def auth_google_callback(code: str):
         user_info = user_res.json()
         user_email = user_info.get("email")
 
-    # Перенаправляем на главную и устанавливаем куку авторизации
-    response = RedirectResponse(url="/", status_code=303)
-    response.set_cookie(key="user_email", value=user_email, httponly=True, max_age=86400 * 30)
+    get_user_status(user_email)
+
+    host_url = str(request.base_url)
+    response = RedirectResponse(url=host_url, status_code=303)
+    response.set_cookie(
+        key="user_email",
+        value=user_email,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=86400 * 30
+    )
     return response
 
 @app.get("/auth/logout")
-def logout():
-    response = RedirectResponse(url="/", status_code=303)
+def logout(request: Request):
+    host_url = str(request.base_url)
+    response = RedirectResponse(url=host_url, status_code=303)
     response.delete_cookie(key="user_email")
     return response
+
+# --- API Админ-панели ---
+@app.get("/api/admin/users")
+def admin_get_users(request: Request):
+    user_email = request.cookies.get("user_email")
+    if get_user_status(user_email) != "admin":
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
+    
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT email, status, created_at FROM users ORDER BY created_at DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    users_list = [{"email": r[0], "status": r[1], "created_at": r[2]} for r in rows]
+    return {"users": users_list}
+
+@app.post("/api/admin/update-status")
+async def admin_update_status(request: Request):
+    user_email = request.cookies.get("user_email")
+    if get_user_status(user_email) != "admin":
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
+    
+    body = await request.json()
+    target_email = body.get("email")
+    new_status = body.get("status")
+    
+    if new_status not in ["free", "vip", "banned"]:
+        raise HTTPException(status_code=400, detail="Неверный статус")
+    
+    if target_email.lower() == ADMIN_EMAIL.lower():
+        raise HTTPException(status_code=400, detail="Нельзя изменить статус главного администратора")
+
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET status = ? WHERE email = ?", (new_status, target_email.lower()))
+    conn.commit()
+    conn.close()
+    
+    return {"success": True}
 
 @app.post("/api/chat")
 async def chat_endpoint(
@@ -176,9 +288,13 @@ async def chat_endpoint(
     file: Optional[UploadFile] = File(None)
 ):
     user_email = request.cookies.get("user_email")
+    status = get_user_status(user_email)
+
+    if status == "banned":
+        raise HTTPException(status_code=403, detail="Ваш аккаунт заблокирован администратором.")
+
     guest_count = int(request.cookies.get("guest_requests", "0"))
 
-    # Проверка лимита 10 бесплатных запросов для гостей
     if not user_email:
         if guest_count >= 10:
             raise HTTPException(
@@ -201,7 +317,6 @@ async def chat_endpoint(
     response_data = {"response": answer}
     json_resp = JSONResponse(content=response_data)
 
-    # Увеличиваем счетчик гостя, если не авторизован
     if not user_email:
         json_resp.set_cookie(key="guest_requests", value=str(guest_count + 1), httponly=False)
 
@@ -247,9 +362,7 @@ HTML_TEMPLATE = """
             top: -15vh; left: -15vw;
             width: 55vw; height: 55vh;
             background: radial-gradient(circle, rgba(99, 102, 241, 0.07) 0%, rgba(168, 85, 247, 0.02) 60%, transparent 80%);
-            z-index: 0;
-            pointer-events: none;
-            filter: blur(80px);
+            z-index: 0; pointer-events: none; filter: blur(80px);
         }
         body::after {
             content: '';
@@ -257,96 +370,61 @@ HTML_TEMPLATE = """
             bottom: -15vh; right: -15vw;
             width: 55vw; height: 55vh;
             background: radial-gradient(circle, rgba(168, 85, 247, 0.06) 0%, rgba(236, 72, 153, 0.01) 60%, transparent 80%);
-            z-index: 0;
-            pointer-events: none;
-            filter: blur(80px);
+            z-index: 0; pointer-events: none; filter: blur(80px);
         }
 
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb {
-            background: var(--scrollbar-thumb);
-            border-radius: 20px;
-        }
+        ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 20px; }
         ::-webkit-scrollbar-thumb:hover { background: rgba(168, 85, 247, 0.3); }
 
         #sidebar-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0;
+            display: none; position: fixed; top: 0; left: 0;
             width: 100vw; height: 100dvh;
-            background: rgba(4, 5, 8, 0.7);
-            backdrop-filter: blur(6px);
-            z-index: 40;
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            background: rgba(4, 5, 8, 0.7); backdrop-filter: blur(6px);
+            z-index: 40; opacity: 0; transition: opacity 0.3s ease;
         }
         #sidebar-overlay.active { display: block; opacity: 1; }
 
         #sidebar { 
-            width: 280px; 
-            min-width: 280px;
-            background: var(--bg-sidebar); 
-            backdrop-filter: blur(24px);
+            width: 280px; min-width: 280px;
+            background: var(--bg-sidebar); backdrop-filter: blur(24px);
             -webkit-backdrop-filter: blur(24px);
             border-right: 1px solid var(--border-color); 
-            display: flex; 
-            flex-direction: column; 
-            padding: 20px 14px; 
-            z-index: 50;
-            height: 100dvh;
+            display: flex; flex-direction: column; padding: 20px 14px; 
+            z-index: 50; height: 100dvh;
             transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.3s cubic-bezier(0.16, 1, 0.3, 1);
             box-shadow: 15px 0 40px rgba(0, 0, 0, 0.4);
         }
         
-        body.sidebar-collapsed #sidebar {
-            margin-left: -280px;
-        }
+        body.sidebar-collapsed #sidebar { margin-left: -280px; }
 
         .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; padding: 0 4px; }
-        
-        .brand-logo-svg { 
-            width: 32px; height: 32px; 
-            filter: drop-shadow(0 0 12px rgba(168, 85, 247, 0.5));
-            flex-shrink: 0;
-        }
-        
+        .brand-logo-svg { width: 32px; height: 32px; filter: drop-shadow(0 0 12px rgba(168, 85, 247, 0.5)); flex-shrink: 0; }
         .brand h2 { font-size: 15px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; }
         .brand span { font-size: 10px; color: var(--text-muted); font-weight: 500; display: block; }
 
         .btn-new-chat { 
-            background: var(--accent-gradient); color: #ffffff; 
-            border: none; padding: 11px 16px; 
-            border-radius: 14px; font-size: 12px; font-weight: 600; 
-            cursor: pointer; display: flex; align-items: center; gap: 9px; 
-            margin-bottom: 18px; transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); 
-            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
+            background: var(--accent-gradient); color: #ffffff; border: none; padding: 11px 16px; 
+            border-radius: 14px; font-size: 12px; font-weight: 600; cursor: pointer; 
+            display: flex; align-items: center; gap: 9px; margin-bottom: 18px; 
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
         }
         .btn-new-chat:hover { transform: translateY(-1px); box-shadow: 0 6px 25px rgba(168, 85, 247, 0.45); }
-        .btn-new-chat:active { transform: translateY(0); }
 
         .chats-header { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-weight: 700; margin-bottom: 8px; padding: 0 4px; text-transform: uppercase; letter-spacing: 0.8px; }
         
         #chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
         .chat-item { 
-            background: rgba(255, 255, 255, 0.015); 
-            border: 1px solid var(--border-color); 
-            border-radius: 12px; padding: 10px 12px; 
-            font-size: 12px; color: #cbd5e1; 
-            display: flex; justify-content: space-between; align-items: center; 
-            cursor: pointer; transition: all 0.2s ease;
+            background: rgba(255, 255, 255, 0.015); border: 1px solid var(--border-color); 
+            border-radius: 12px; padding: 10px 12px; font-size: 12px; color: #cbd5e1; 
+            display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: all 0.2s ease;
         }
         .chat-item.active { 
-            background: rgba(168, 85, 247, 0.1); 
-            border-color: rgba(168, 85, 247, 0.35); 
-            color: #ffffff; 
-            box-shadow: 0 0 20px rgba(168, 85, 247, 0.08); 
+            background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.35); 
+            color: #ffffff; box-shadow: 0 0 20px rgba(168, 85, 247, 0.08); 
         }
-        .chat-item:hover { 
-            background: rgba(255, 255, 255, 0.04); 
-            border-color: var(--border-hover); 
-            color: #ffffff; 
-        }
+        .chat-item:hover { background: rgba(255, 255, 255, 0.04); border-color: var(--border-hover); color: #ffffff; }
         .chat-item .close-btn { color: var(--text-muted); font-size: 14px; cursor: pointer; border-radius: 6px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
         .chat-item .close-btn:hover { color: #f87171; background: rgba(248, 113, 113, 0.15); }
 
@@ -356,89 +434,88 @@ HTML_TEMPLATE = """
         .status-dot { width: 7px; height: 7px; background: #a855f7; border-radius: 50%; box-shadow: 0 0 10px rgba(168, 85, 247, 0.8); }
 
         .btn-google-login {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            color: #ffffff;
-            padding: 8px 12px;
-            border-radius: 10px;
-            font-size: 11.5px;
-            font-weight: 600;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            transition: all 0.2s ease;
+            background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #ffffff; padding: 8px 12px; border-radius: 10px; font-size: 11.5px; font-weight: 600;
+            text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s ease;
         }
-        .btn-google-login:hover {
-            background: rgba(255, 255, 255, 0.1);
-            border-color: rgba(168, 85, 247, 0.4);
+        .btn-google-login:hover { background: rgba(255, 255, 255, 0.1); border-color: rgba(168, 85, 247, 0.4); }
+
+        .btn-admin-panel {
+            background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.4);
+            color: #d8b4fe; padding: 8px 12px; border-radius: 10px; font-size: 11.5px; font-weight: 600;
+            cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s ease;
+            width: 100%; margin-bottom: 4px;
+        }
+        .btn-admin-panel:hover { background: rgba(168, 85, 247, 0.25); color: #fff; }
+
+        #admin-modal {
+            display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
+            background: rgba(4, 5, 8, 0.8); backdrop-filter: blur(8px); z-index: 100;
+            align-items: center; justify-content: center; padding: 20px;
+        }
+        #admin-modal.active { display: flex; }
+        .admin-box {
+            background: #0d1018; border: 1px solid rgba(168, 85, 247, 0.3);
+            border-radius: 20px; width: 100%; max-width: 650px; max-height: 80dvh;
+            display: flex; flex-direction: column; overflow: hidden;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 30px rgba(168,85,247,0.15);
+        }
+        .admin-header {
+            padding: 16px 20px; border-bottom: 1px solid var(--border-color);
+            display: flex; justify-content: space-between; align-items: center;
+            background: rgba(18, 21, 31, 0.6);
+        }
+        .admin-header h3 { font-size: 15px; color: #fff; font-weight: 700; }
+        .admin-close { background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; }
+        .admin-close:hover { color: #f87171; }
+        .admin-content { padding: 16px 20px; overflow-y: auto; flex: 1; }
+        .admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .admin-table th, .admin-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-color); }
+        .admin-table th { color: var(--text-muted); font-weight: 600; }
+        .badge { padding: 3px 8px; border-radius: 6px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; }
+        .badge-free { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+        .badge-vip { background: rgba(168, 85, 247, 0.2); color: #d8b4fe; border: 1px solid rgba(168,85,247,0.3); }
+        .badge-banned { background: rgba(248, 113, 113, 0.2); color: #f87171; border: 1px solid rgba(248,113,113,0.3); }
+        .admin-actions-cell select {
+            background: rgba(255,255,255,0.05); border: 1px solid var(--border-color);
+            color: #fff; padding: 4px 8px; border-radius: 8px; font-size: 11px; outline: none; cursor: pointer;
         }
 
         #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100dvh; overflow: hidden; z-index: 1; }
         
         #chat-header { 
-            height: 60px; min-height: 60px;
-            border-bottom: 1px solid var(--border-color); 
+            height: 60px; min-height: 60px; border-bottom: 1px solid var(--border-color); 
             display: flex; align-items: center; justify-content: space-between; 
-            padding: 0 24px; background: rgba(4, 5, 8, 0.5); 
-            backdrop-filter: blur(16px); z-index: 10;
+            padding: 0 24px; background: rgba(4, 5, 8, 0.5); backdrop-filter: blur(16px); z-index: 10;
         }
         .header-left { display: flex; align-items: center; gap: 14px; }
         
         .menu-toggle { 
-            background: rgba(255, 255, 255, 0.02); 
-            border: 1px solid var(--border-color); 
-            color: #ffffff; 
-            border-radius: 12px; 
-            padding: 8px; 
-            cursor: pointer; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            transition: all 0.2s ease;
+            background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); 
+            color: #ffffff; border-radius: 12px; padding: 8px; cursor: pointer; 
+            display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;
         }
         .menu-toggle:hover { background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.3); }
-        
         #chat-header h3 { font-size: 14px; font-weight: 600; color: #ffffff; letter-spacing: -0.2px; }
 
         #chat-container { 
             flex: 1; overflow-y: auto; padding: 24px 24px 140px 24px; 
             display: flex; flex-direction: column; gap: 22px; 
-            max-width: 900px; width: 100%; margin: 0 auto;
-            position: relative;
-            z-index: 2;
+            max-width: 900px; width: 100%; margin: 0 auto; position: relative; z-index: 2;
         }
 
         .welcome-screen {
-            position: absolute;
-            top: 45%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            user-select: none;
-            pointer-events: none;
-            width: 90%;
-            max-width: 480px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 16px;
+            position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%);
+            text-align: center; user-select: none; pointer-events: none; width: 90%; max-width: 480px;
+            display: flex; flex-direction: column; align-items: center; gap: 16px;
             animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
         }
         .welcome-avatar-glow {
-            position: relative;
-            padding: 20px;
-            border-radius: 28px;
-            background: rgba(168, 85, 247, 0.04);
-            border: 1px solid rgba(168, 85, 247, 0.15);
-            box-shadow: 0 0 50px rgba(168, 85, 247, 0.12);
-            margin-bottom: 4px;
+            position: relative; padding: 20px; border-radius: 28px;
+            background: rgba(168, 85, 247, 0.04); border: 1px solid rgba(168, 85, 247, 0.15);
+            box-shadow: 0 0 50px rgba(168, 85, 247, 0.12); margin-bottom: 4px;
         }
-        .welcome-avatar-svg {
-            width: 60px; height: 60px;
-            filter: drop-shadow(0 0 18px rgba(168, 85, 247, 0.6));
-        }
+        .welcome-avatar-svg { width: 60px; height: 60px; filter: drop-shadow(0 0 18px rgba(168, 85, 247, 0.6)); }
         .welcome-screen h1 { font-size: 24px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; }
         .welcome-screen p { font-size: 13.5px; color: var(--text-muted); line-height: 1.6; }
         
@@ -453,16 +530,14 @@ HTML_TEMPLATE = """
             background: var(--user-msg-bg); color: #ffffff; 
             border: 1px solid rgba(168, 85, 247, 0.22); border-radius: 18px 18px 4px 18px; 
             padding: 13px 18px; font-size: 13.5px; line-height: 1.55; max-width: 85%; 
-            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.12); word-break: break-word;
-            backdrop-filter: blur(12px);
+            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.12); word-break: break-word; backdrop-filter: blur(12px);
         }
         
         .msg-bot { 
             background: var(--bot-msg-bg); border: 1px solid var(--border-color); 
             color: #e2e8f0; border-radius: 18px 18px 18px 4px; 
             padding: 18px 22px; font-size: 13.5px; line-height: 1.65; max-width: 90%; 
-            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35); word-break: break-word;
-            backdrop-filter: blur(20px);
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35); word-break: break-word; backdrop-filter: blur(20px);
         }
 
         .msg-bot p { margin-bottom: 12px; }
@@ -474,47 +549,19 @@ HTML_TEMPLATE = """
         
         .file-preview-tag { display: inline-flex; align-items: center; gap: 6px; background: rgba(168, 85, 247, 0.15); padding: 5px 10px; border-radius: 8px; font-size: 11px; margin-bottom: 8px; border: 1px solid rgba(168, 85, 247, 0.3); color: #d8b4fe; }
 
-        .cancelled-container {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            width: 100%;
-            animation: messageIn 0.2s ease-out;
-        }
-        .cancelled-line {
-            width: 100%;
-            max-width: 85%;
-            height: 1px;
-            background: rgba(255, 255, 255, 0.06);
-            margin: 8px 0 4px 0;
-        }
-        .cancelled-text {
-            font-size: 10px;
-            color: var(--text-muted);
-            font-style: italic;
-            letter-spacing: 0.3px;
-            padding-right: 4px;
-        }
+        .cancelled-container { display: flex; flex-direction: column; align-items: flex-end; width: 100%; animation: messageIn 0.2s ease-out; }
+        .cancelled-line { width: 100%; max-width: 85%; height: 1px; background: rgba(255, 255, 255, 0.06); margin: 8px 0 4px 0; }
+        .cancelled-text { font-size: 10px; color: var(--text-muted); font-style: italic; letter-spacing: 0.3px; padding-right: 4px; }
 
         .loader-box {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            background: var(--bot-msg-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 18px 18px 18px 4px;
-            padding: 14px 20px;
-            font-size: 13.5px;
-            color: var(--text-muted);
-            backdrop-filter: blur(20px);
+            display: flex; align-items: center; gap: 12px; background: var(--bot-msg-bg);
+            border: 1px solid var(--border-color); border-radius: 18px 18px 18px 4px;
+            padding: 14px 20px; font-size: 13.5px; color: var(--text-muted); backdrop-filter: blur(20px);
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
         }
         .spinner {
-            width: 16px; height: 16px;
-            border: 2px solid rgba(168,85,247,0.2);
-            border-top-color: #a855f7;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
+            width: 16px; height: 16px; border: 2px solid rgba(168,85,247,0.2);
+            border-top-color: #a855f7; border-radius: 50%; animation: spin 0.8s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -526,12 +573,9 @@ HTML_TEMPLATE = """
         }
 
         #input-container { 
-            max-width: 900px; margin: 0 auto; 
-            background: rgba(13, 16, 24, 0.8); 
-            backdrop-filter: blur(24px);
-            -webkit-backdrop-filter: blur(24px);
-            border: 1px solid rgba(168, 85, 247, 0.18); 
-            border-radius: 20px; 
+            max-width: 900px; margin: 0 auto; background: rgba(13, 16, 24, 0.8); 
+            backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(168, 85, 247, 0.18); border-radius: 20px; 
             padding: 8px 12px; display: flex; flex-direction: column; gap: 8px;
             box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 25px rgba(168, 85, 247, 0.06);
             transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
@@ -549,16 +593,9 @@ HTML_TEMPLATE = """
         .input-row { display: flex; gap: 8px; align-items: center; width: 100%; }
 
         .mini-btn { 
-            background: rgba(255, 255, 255, 0.02); 
-            border: 1px solid var(--border-color); 
-            color: var(--text-muted); 
-            padding: 10px; 
-            border-radius: 12px; 
-            cursor: pointer; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            transition: all 0.2s ease; 
+            background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); 
+            color: var(--text-muted); padding: 10px; border-radius: 12px; cursor: pointer; 
+            display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; 
         }
         .mini-btn:hover { color: #ffffff; background: rgba(168, 85, 247, 0.12); border-color: rgba(168, 85, 247, 0.3); transform: translateY(-1px); }
 
@@ -573,26 +610,15 @@ HTML_TEMPLATE = """
             box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
         }
         .btn-action:hover { transform: translateY(-1px); box-shadow: 0 6px 25px rgba(168, 85, 247, 0.45); }
-        .btn-action:active { transform: translateY(0); }
         
         .btn-action.cancel-mode {
-            background: var(--cancel-bg);
-            border: 1px solid var(--cancel-border);
-            color: var(--cancel-color);
-            box-shadow: 0 4px 20px rgba(248, 113, 113, 0.15);
+            background: var(--cancel-bg); border: 1px solid var(--cancel-border);
+            color: var(--cancel-color); box-shadow: 0 4px 20px rgba(248, 113, 113, 0.15);
         }
-        .btn-action.cancel-mode:hover {
-            background: rgba(248, 113, 113, 0.22);
-            box-shadow: 0 6px 25px rgba(248, 113, 113, 0.25);
-        }
+        .btn-action.cancel-mode:hover { background: rgba(248, 113, 113, 0.22); }
 
         @media (max-width: 768px) {
-            #sidebar { 
-                position: fixed; 
-                top: 0; left: 0; 
-                margin-left: 0 !important;
-                transform: translateX(-100%); 
-            }
+            #sidebar { position: fixed; top: 0; left: 0; margin-left: 0 !important; transform: translateX(-100%); }
             #sidebar.mobile-open { transform: translateX(0); }
             #chat-header { padding: 0 16px; }
             #chat-container { padding: 16px 16px 120px 16px; }
@@ -602,6 +628,29 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <div id="admin-modal" onclick="closeAdminModal(event)">
+        <div class="admin-box" onclick="event.stopPropagation()">
+            <div class="admin-header">
+                <h3>👑 Панель администратора</h3>
+                <button class="admin-close" onclick="toggleAdminModal(false)">×</button>
+            </div>
+            <div class="admin-content">
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Статус</th>
+                            <th>Действие</th>
+                        </tr>
+                    </thead>
+                    <tbody id="admin-users-list">
+                        <tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Загрузка...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 
     <div id="sidebar">
         <div class="brand">
@@ -635,7 +684,6 @@ HTML_TEMPLATE = """
         <div id="chats-list"></div>
 
         <div class="sidebar-footer">
-            <!-- Блок авторизации и лимитов -->
             USER_AUTH_BLOCK
             <div class="footer-info">
                 <div class="footer-left-status">
@@ -717,6 +765,68 @@ HTML_TEMPLATE = """
             }
         }
 
+        function toggleAdminModal(show) {
+            const modal = document.getElementById('admin-modal');
+            if (show) {
+                modal.classList.add('active');
+                loadAdminUsers();
+            } else {
+                modal.classList.remove('active');
+            }
+        }
+
+        function closeAdminModal(e) {
+            if (e.target.id === 'admin-modal') {
+                toggleAdminModal(false);
+            }
+        }
+
+        async function loadAdminUsers() {
+            const tbody = document.getElementById('admin-users-list');
+            tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Загрузка...</td></tr>';
+            try {
+                const res = await fetch('/api/admin/users');
+                if (!res.ok) throw new Error('Ошибка доступа');
+                const data = await res.json();
+                
+                tbody.innerHTML = '';
+                data.users.forEach(u => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td style="word-break:break-all;">${escapeHtml(u.email)}</td>
+                        <td><span class="badge badge-${u.status}">${u.status}</span></td>
+                        <td class="admin-actions-cell">
+                            <select onchange="updateUserStatus('${u.email}', this.value)">
+                                <option value="free" ${u.status === 'free' ? 'selected' : ''}>Free</option>
+                                <option value="vip" ${u.status === 'vip' ? 'selected' : ''}>VIP</option>
+                                <option value="banned" ${u.status === 'banned' ? 'selected' : ''}>Ban</option>
+                            </select>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:#f87171;">Не удалось загрузить список пользователей.</td></tr>';
+            }
+        }
+
+        async function updateUserStatus(email, status) {
+            try {
+                const res = await fetch('/api/admin/update-status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, status })
+                });
+                if (!res.ok) {
+                    const errData = await res.json();
+                    alert(errData.detail || 'Ошибка при изменении статуса');
+                }
+                loadAdminUsers();
+            } catch (e) {
+                alert('Ошибка соединения с сервером');
+            }
+        }
+
         function renderChats() {
             const list = document.getElementById('chats-list');
             list.innerHTML = '';
@@ -742,15 +852,11 @@ HTML_TEMPLATE = """
         }
 
         function switchChat(id) {
-            if (activeController) {
-                activeController.abort();
-            }
+            if (activeController) activeController.abort();
             currentChatId = id;
             setGeneratingState(false);
             saveState();
-            if (window.innerWidth <= 768) {
-                toggleSidebar();
-            }
+            if (window.innerWidth <= 768) toggleSidebar();
         }
 
         function createNewChat() {
@@ -758,9 +864,7 @@ HTML_TEMPLATE = """
                 if (window.innerWidth <= 768) toggleSidebar();
                 return;
             }
-            if (activeController) {
-                activeController.abort();
-            }
+            if (activeController) activeController.abort();
             const newChat = {
                 id: Date.now().toString(),
                 name: `Новый чат ${chats.length + 1}`,
@@ -775,9 +879,7 @@ HTML_TEMPLATE = """
 
         function deleteChat(id) {
             chats = chats.filter(c => c.id !== id);
-            if (currentChatId === id) {
-                currentChatId = chats[0].id;
-            }
+            if (currentChatId === id) currentChatId = chats[0].id;
             saveState();
         }
 
@@ -818,25 +920,19 @@ HTML_TEMPLATE = """
                     const box = document.createElement('div');
                     box.className = 'msg-user';
                     let content = '';
-                    if (msg.file) {
-                        content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
-                    }
+                    if (msg.file) content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
                     content += escapeHtml(msg.text);
                     box.innerHTML = content;
                     row.appendChild(box);
                 } else if (msg.role === 'cancelled') {
                     const container = document.createElement('div');
                     container.className = 'cancelled-container';
-                    
                     const box = document.createElement('div');
                     box.className = 'msg-user';
                     let content = '';
-                    if (msg.file) {
-                        content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
-                    }
+                    if (msg.file) content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
                     content += escapeHtml(msg.text);
                     box.innerHTML = content;
-                    
                     container.appendChild(box);
                     
                     const line = document.createElement('div');
@@ -847,16 +943,12 @@ HTML_TEMPLATE = """
                     smallText.className = 'cancelled-text';
                     smallText.textContent = 'сообщение отменено';
                     container.appendChild(smallText);
-
                     row.appendChild(container);
                 } else {
                     const box = document.createElement('div');
                     box.className = 'msg-bot';
-                    if (msg.text.includes('<img')) {
-                        box.innerHTML = msg.text;
-                    } else {
-                        box.innerHTML = marked.parse(msg.text);
-                    }
+                    if (msg.text.includes('<img')) box.innerHTML = msg.text;
+                    else box.innerHTML = marked.parse(msg.text);
                     row.appendChild(box);
                 }
 
@@ -902,11 +994,8 @@ HTML_TEMPLATE = """
         }
 
         function handleActionButton() {
-            if (isGenerating) {
-                cancelCurrentRequest();
-            } else {
-                sendMessage();
-            }
+            if (isGenerating) cancelCurrentRequest();
+            else sendMessage();
         }
 
         function cancelCurrentRequest() {
@@ -914,15 +1003,11 @@ HTML_TEMPLATE = """
                 activeController.abort();
                 activeController = null;
             }
-
             const activeChat = chats.find(c => c.id === currentChatId);
             if (activeChat && activeChat.messages.length > 0) {
                 const lastMsg = activeChat.messages[activeChat.messages.length - 1];
-                if (lastMsg.role === 'user') {
-                    lastMsg.role = 'cancelled';
-                }
+                if (lastMsg.role === 'user') lastMsg.role = 'cancelled';
             }
-
             document.getElementById('temp-loader-row')?.remove();
             setGeneratingState(false);
             saveState();
@@ -931,18 +1016,12 @@ HTML_TEMPLATE = """
         async function sendMessage() {
             const input = document.getElementById('prompt-input');
             const text = input.value.trim();
-            
             if (!text && !selectedFile) return;
 
             const activeChat = chats.find(c => c.id === currentChatId);
             if (!activeChat) return;
 
-            const userMsg = {
-                role: 'user',
-                text: text,
-                file: selectedFile ? selectedFile.name : null
-            };
-
+            const userMsg = { role: 'user', text: text, file: selectedFile ? selectedFile.name : null };
             activeChat.messages.push(userMsg);
             if (activeChat.messages.length === 1 && text) {
                 activeChat.name = text.slice(0, 18) + (text.length > 18 ? '...' : '');
@@ -952,9 +1031,7 @@ HTML_TEMPLATE = """
 
             const formData = new FormData();
             formData.append('prompt', text);
-            if (selectedFile) {
-                formData.append('file', selectedFile);
-            }
+            if (selectedFile) formData.append('file', selectedFile);
 
             input.value = '';
             removeSelectedFile();
@@ -993,9 +1070,7 @@ HTML_TEMPLATE = """
                     activeChat.messages.push({ role: 'bot', text: 'Ошибка: ' + (data.detail || 'Не удалось получить ответ.') });
                 }
             } catch (e) {
-                if (e.name === 'AbortError') {
-                    return;
-                }
+                if (e.name === 'AbortError') return;
                 document.getElementById('temp-loader-row')?.remove();
                 setGeneratingState(false);
                 activeController = null;
@@ -1018,11 +1093,13 @@ HTML_TEMPLATE = """
 @app.get("/", response_class=HTMLResponse)
 async def get_chat_ui(request: Request):
     user_email = request.cookies.get("user_email")
+    status = get_user_status(user_email)
     guest_count = int(request.cookies.get("guest_requests", "0"))
     
-    # Формируем блок авторизации/лимитов в сайдбаре в зависимости от того, вошел ли пользователь
     if user_email:
+        admin_btn_html = f"""<button class="btn-admin-panel" onclick="toggleAdminModal(true)">👑 Админ-панель</button>""" if status == "admin" else ""
         auth_block = f"""
+            {admin_btn_html}
             <div style="font-size: 11px; color: #a855f7; word-break: break-all; margin-bottom: 4px;">👤 {user_email}</div>
             <a href="/auth/logout" style="color: #f87171; font-size: 11px; text-decoration: none; margin-bottom: 6px; display: inline-block;">Выйти из аккаунта</a>
         """
