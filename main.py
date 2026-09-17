@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, File, Form, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
@@ -16,6 +17,14 @@ app = FastAPI()
 
 # Поддержка HTTPS заголовков прокси Render
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
+
+# Защищенные сессии с криптографическим ключом (защита от подделки email через консоль)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("SESSION_SECRET_KEY", "rubinov-ai-super-secure-secret-key-2026-xyz"),
+    https_only=True, # Требует HTTPS на Render
+    same_site="lax"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,7 +48,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Безопасное добавление колонок, если таблица уже существовала в старом формате
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN requests_count INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
@@ -76,7 +84,6 @@ def get_user_status(email: str) -> str:
     return "free"
 
 MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro"]
-
 current_key_idx = 0
 current_model_idx = 0
 
@@ -123,10 +130,7 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
     api_keys = get_api_keys()
     if not api_keys:
-        raise HTTPException(
-            status_code=500,
-            detail="API-ключи не найдены в Environment Variables."
-        )
+        raise HTTPException(status_code=500, detail="API-ключи не найдены в Environment Variables.")
 
     num_keys = len(api_keys)
     num_models = len(MODELS)
@@ -144,32 +148,21 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
         try:
             client = get_gemini_client(active_key)
-            response = client.models.generate_content(
-                model=active_model,
-                contents=contents
-            )
+            response = client.models.generate_content(model=active_model, contents=contents)
             return response.text
-
         except APIError as e:
-            if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e) or "high demand" in str(e).lower():
+            if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e):
                 current_model_idx += 1
                 if current_model_idx >= num_models:
                     current_model_idx = 0
                     current_key_idx = (current_key_idx + 1) % num_keys
                 time.sleep(0.5)
                 continue
-            elif e.code == 404 or "not found" in str(e).lower():
-                current_model_idx = (current_model_idx + 1) % num_models
-                continue
-            else:
-                break
+            break
         except Exception:
             break
 
-    raise HTTPException(
-        status_code=500,
-        detail="Сервис ИИ перегружен в данный момент. Повторите попытку через несколько секунд."
-    )
+    raise HTTPException(status_code=500, detail="Сервис ИИ перегружен. Повторите попытку.")
 
 @app.get("/health")
 def health_check():
@@ -180,9 +173,7 @@ def health_check():
 def login_google(request: Request):
     if not GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID не настроен")
-    
     current_redirect_uri = get_redirect_uri(request)
-    
     google_auth_url = (
         f"https://accounts.google.com/o/oauth2/v2/auth?"
         f"client_id={GOOGLE_CLIENT_ID}&"
@@ -194,14 +185,11 @@ def login_google(request: Request):
 
 @app.get("/auth/google/callback")
 async def auth_google_callback(request: Request, code: Optional[str] = None, error: Optional[str] = None):
-    if error:
-        raise HTTPException(status_code=400, detail=f"Google вернул ошибку: {error}")
-    if not code:
-        raise HTTPException(status_code=400, detail="Код авторизации (code) не получен от Google.")
+    if error or not code:
+        raise HTTPException(status_code=400, detail="Ошибка авторизации Google")
 
     token_url = "https://oauth2.googleapis.com/token"
     current_redirect_uri = get_redirect_uri(request)
-    
     payload = {
         "code": code,
         "client_id": GOOGLE_CLIENT_ID,
@@ -213,7 +201,7 @@ async def auth_google_callback(request: Request, code: Optional[str] = None, err
     async with httpx.AsyncClient() as client:
         token_res = await client.post(token_url, data=payload)
         if token_res.status_code != 200:
-            raise HTTPException(status_code=400, detail=f"Ошибка обмена токена с Google: {token_res.text}")
+            raise HTTPException(status_code=400, detail="Ошибка обмена токена с Google")
         
         token_data = token_res.json()
         access_token = token_data.get("access_token")
@@ -223,42 +211,33 @@ async def auth_google_callback(request: Request, code: Optional[str] = None, err
             headers={"Authorization": f"Bearer {access_token}"}
         )
         if user_res.status_code != 200:
-            raise HTTPException(status_code=400, detail="Не удалось получить профиль пользователя")
+            raise HTTPException(status_code=400, detail="Не удалось получить профиль")
         
         user_info = user_res.json()
         user_email = user_info.get("email")
 
     get_user_status(user_email)
 
-    host_url = str(request.base_url)
-    response = RedirectResponse(url=host_url, status_code=303)
-    response.set_cookie(
-        key="user_email",
-        value=user_email,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=86400 * 30
-    )
-    return response
+    # Сохраняем email строго в защищенную криптографическую сессию
+    request.session["user_email"] = user_email
+
+    return RedirectResponse(url=str(request.base_url), status_code=303)
 
 @app.get("/auth/logout")
 def logout(request: Request):
-    host_url = str(request.base_url)
-    response = RedirectResponse(url=host_url, status_code=303)
-    response.delete_cookie(key="user_email")
-    return response
+    request.session.clear()
+    return RedirectResponse(url=str(request.base_url), status_code=303)
 
 @app.get("/api/status-check")
 def status_check(request: Request):
-    user_email = request.cookies.get("user_email")
+    user_email = request.session.get("user_email")
     status = get_user_status(user_email)
     return {"status": status, "email": user_email}
 
 # --- API Админ-панели ---
 @app.get("/api/admin/users")
 def admin_get_users(request: Request):
-    user_email = request.cookies.get("user_email")
+    user_email = request.session.get("user_email")
     if get_user_status(user_email) != "admin":
         raise HTTPException(status_code=403, detail="Доступ запрещен")
     
@@ -268,12 +247,11 @@ def admin_get_users(request: Request):
     rows = cursor.fetchall()
     conn.close()
     
-    users_list = [{"email": r[0], "status": r[1], "requests_count": r[2], "created_at": r[3]} for r in rows]
-    return {"users": users_list}
+    return {"users": [{"email": r[0], "status": r[1], "requests_count": r[2], "created_at": r[3]} for r in rows]}
 
 @app.post("/api/admin/update-status")
 async def admin_update_status(request: Request):
-    user_email = request.cookies.get("user_email")
+    user_email = request.session.get("user_email")
     if get_user_status(user_email) != "admin":
         raise HTTPException(status_code=403, detail="Доступ запрещен")
     
@@ -301,22 +279,18 @@ async def chat_endpoint(
     prompt: str = Form(""),
     file: Optional[UploadFile] = File(None)
 ):
-    user_email = request.cookies.get("user_email")
+    user_email = request.session.get("user_email")
     status = get_user_status(user_email)
 
     if status == "banned":
         raise HTTPException(status_code=403, detail="Ваш аккаунт заблокирован администратором.")
 
-    # Проверка лимитов и файлов
     if not user_email:
         guest_count = int(request.cookies.get("guest_requests", "0"))
         if guest_count >= 10:
-            raise HTTPException(
-                status_code=403, 
-                detail="Исчерпан лимит (10 запросов) для гостя. Войдите через Google аккаунт (до 50 запросов в сутки бесплатно)."
-            )
+            raise HTTPException(status_code=403, detail="Лимит гостя исчерпан (10 запросов). Войдите через Google.")
         if file:
-            raise HTTPException(status_code=403, detail="Гости не могут отправлять файлы и фото. Войдите в аккаунт.")
+            raise HTTPException(status_code=403, detail="Гости не могут отправлять файлы.")
     elif status == "free":
         if file:
             raise HTTPException(status_code=403, detail="Отправка файлов и фото доступна только VIP-пользователям.")
@@ -336,7 +310,7 @@ async def chat_endpoint(
             
         if req_count >= 50:
             conn.close()
-            raise HTTPException(status_code=403, detail="Исчерпан суточный лимит (50 запросов) для Free аккаунта. Перейдите на VIP для безлимита.")
+            raise HTTPException(status_code=403, detail="Исчерпан суточный лимит (50 запросов) для Free.")
             
         cursor.execute("UPDATE users SET requests_count = ? WHERE email = ?", (req_count + 1, user_email.lower()))
         conn.commit()
@@ -349,9 +323,7 @@ async def chat_endpoint(
     mime_type = file.content_type if file else None
 
     answer = get_gemini_response(prompt, file_bytes, mime_type)
-    
-    response_data = {"response": answer}
-    json_resp = JSONResponse(content=response_data)
+    json_resp = JSONResponse(content={"response": answer})
 
     if not user_email:
         guest_count = int(request.cookies.get("guest_requests", "0"))
@@ -1143,7 +1115,7 @@ HTML_TEMPLATE = """
 
 @app.get("/", response_class=HTMLResponse)
 async def get_chat_ui(request: Request):
-    user_email = request.cookies.get("user_email")
+    user_email = request.session.get("user_email")
     status = get_user_status(user_email)
     
     if user_email:
