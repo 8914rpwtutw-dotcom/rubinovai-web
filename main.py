@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import traceback
 import psycopg2
 from typing import Optional
 from fastapi import FastAPI, HTTPException, File, Form, UploadFile, Request
@@ -95,7 +96,7 @@ def get_user_status(email: str) -> str:
     conn.close()
     return "free"
 
-MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro"]
+MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash"]
 current_key_idx = 0
 current_model_idx = 0
 
@@ -142,7 +143,8 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
     api_keys = get_api_keys()
     if not api_keys:
-        raise HTTPException(status_code=500, detail="API-ключи не найдены в Environment Variables.")
+        print("ОШИБКА: Ни один API-ключ Gemini не найден в Environment Variables!")
+        raise HTTPException(status_code=500, detail="API-ключи Gemini не найдены в переменные окружения Render.")
 
     num_keys = len(api_keys)
     num_models = len(MODELS)
@@ -154,35 +156,31 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
     if prompt:
         contents.append(prompt)
 
+    last_error = "Неизвестная ошибка"
+
     for attempt in range(total_attempts):
         active_key = api_keys[current_key_idx % num_keys]
         active_model = MODELS[current_model_idx % num_models]
 
         try:
             client = get_gemini_client(active_key)
-            # Используем рекомендованный метод чата, исправляющий ошибку 500 и предупреждения AFC
-            chat = client.chats.create(model=active_model)
-            response = chat.send_message(contents)
+            response = client.models.generate_content(
+                model=active_model,
+                contents=contents
+            )
             if response and response.text:
                 return response.text
-        except APIError as e:
-            if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e):
-                current_model_idx += 1
-                if current_model_idx >= num_models:
-                    current_model_idx = 0
-                    current_key_idx = (current_key_idx + 1) % num_keys
-                time.sleep(0.5)
-                continue
-            break
         except Exception as err:
-            print(f"Gemini API Error: {err}")
+            last_error = str(err)
+            print(f"Ошибка вызова Gemini API (Модель: {active_model}, Ключ №{current_key_idx % num_keys + 1}): {err}")
             current_model_idx += 1
             if current_model_idx >= num_models:
                 current_model_idx = 0
                 current_key_idx = (current_key_idx + 1) % num_keys
+            time.sleep(0.3)
             continue
 
-    raise HTTPException(status_code=500, detail="Сервис ИИ перегружен. Повторите попытку.")
+    raise HTTPException(status_code=500, detail=f"Ошибка генерации ИИ: {last_error}")
 
 @app.get("/health")
 def health_check():
@@ -297,59 +295,68 @@ async def chat_endpoint(
     prompt: str = Form(""),
     file: Optional[UploadFile] = File(None)
 ):
-    user_email = request.session.get("user_email")
-    status = get_user_status(user_email)
+    try:
+        user_email = request.session.get("user_email")
+        status = get_user_status(user_email)
 
-    if status == "banned":
-        raise HTTPException(status_code=403, detail="Ваш аккаунт заблокирован администратором.")
+        if status == "banned":
+            raise HTTPException(status_code=403, detail="Ваш аккаунт заблокирован администратором.")
 
-    if not user_email:
-        guest_count = int(request.cookies.get("guest_requests", "0"))
-        if guest_count >= 10:
-            raise HTTPException(status_code=403, detail="Лимит гостя исчерпан (10 запросов). Войдите через Google.")
-        if file:
-            raise HTTPException(status_code=403, detail="Гости не могут отправлять файлы.")
-    elif status == "free":
-        if file:
-            raise HTTPException(status_code=403, detail="Отправка файлов и фото доступна только VIP-пользователям.")
+        if not user_email:
+            guest_count = int(request.cookies.get("guest_requests", "0"))
+            if guest_count >= 10:
+                raise HTTPException(status_code=403, detail="Лимит гостя исчерпан (10 запросов). Войдите через Google.")
+            if file:
+                raise HTTPException(status_code=403, detail="Гости не могут отправлять файлы.")
+        elif status == "free":
+            if file:
+                raise HTTPException(status_code=403, detail="Отправка файлов и фото доступна только VIP-пользователям.")
 
-        today = time.strftime("%Y-%m-%d")
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT requests_count, last_reset_date FROM users WHERE email = %s", (user_email.lower(),))
-        row = cursor.fetchone()
-        
-        req_count, last_date = (row[0], row[1]) if row else (0, "")
-        
-        if last_date != today:
-            req_count = 0
-            cursor.execute("UPDATE users SET requests_count = 0, last_reset_date = %s WHERE email = %s", (today, user_email.lower()))
-            conn.commit()
+            today = time.strftime("%Y-%m-%d")
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT requests_count, last_reset_date FROM users WHERE email = %s", (user_email.lower(),))
+            row = cursor.fetchone()
             
-        if req_count >= 50:
+            req_count, last_date = (row[0], row[1]) if row else (0, "")
+            
+            if last_date != today:
+                req_count = 0
+                cursor.execute("UPDATE users SET requests_count = 0, last_reset_date = %s WHERE email = %s", (today, user_email.lower()))
+                conn.commit()
+                
+            if req_count >= 50:
+                cursor.close()
+                conn.close()
+                raise HTTPException(status_code=403, detail="Исчерпан суточный лимит (50 запросов) для Free.")
+                
+            cursor.execute("UPDATE users SET requests_count = %s WHERE email = %s", (req_count + 1, user_email.lower()))
+            conn.commit()
             cursor.close()
             conn.close()
-            raise HTTPException(status_code=403, detail="Исчерпан суточный лимит (50 запросов) для Free.")
-            
-        cursor.execute("UPDATE users SET requests_count = %s WHERE email = %s", (req_count + 1, user_email.lower()))
-        conn.commit()
-        cursor.close()
-        conn.close()
 
-    if not prompt.strip() and not file:
-        raise HTTPException(status_code=400, detail="Запрос или файл обязателен")
-    
-    file_bytes = await file.read() if file else None
-    mime_type = file.content_type if file else None
+        if not prompt.strip() and not file:
+            raise HTTPException(status_code=400, detail="Запрос или файл обязателен")
+        
+        file_bytes = await file.read() if file else None
+        mime_type = file.content_type if file else None
 
-    answer = get_gemini_response(prompt, file_bytes, mime_type)
-    json_resp = JSONResponse(content={"response": answer})
+        answer = get_gemini_response(prompt, file_bytes, mime_type)
+        json_resp = JSONResponse(content={"response": answer})
 
-    if not user_email:
-        guest_count = int(request.cookies.get("guest_requests", "0"))
-        json_resp.set_cookie(key="guest_requests", value=str(guest_count + 1), httponly=False)
+        if not user_email:
+            guest_count = int(request.cookies.get("guest_requests", "0"))
+            json_resp.set_cookie(key="guest_requests", value=str(guest_count + 1), httponly=False)
 
-    return json_resp
+        return json_resp
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print("--- EXCEPTION IN /api/chat ---")
+        traceback.print_exc()
+        print("------------------------------")
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {exc}")
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
