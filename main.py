@@ -42,8 +42,10 @@ def get_db_connection():
         raise HTTPException(status_code=500, detail="DATABASE_URL не настроена в Environment Variables.")
     return psycopg2.connect(DATABASE_URL)
 
+# Единственный СУПЕР-АДМИНИСТРАТОР (главный владельц)
 SUPER_ADMIN = "8914rpwtutw@gmail.com".lower()
 
+# Начальный список обычных администраторов
 INITIAL_ADMINS = [
     "egrandr123123@gmail.com",
     "gorvov2003@gmail.com"
@@ -68,29 +70,22 @@ def init_db():
             CREATE TABLE IF NOT EXISTS tickets (
                 id SERIAL PRIMARY KEY,
                 user_email TEXT NOT NULL,
+                message TEXT NOT NULL,
+                admin_reply TEXT DEFAULT '',
                 status TEXT DEFAULT 'open',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
-        # Сообщения внутри тикета (Мини-чат)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS ticket_messages (
-                id SERIAL PRIMARY KEY,
-                ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
-                sender TEXT NOT NULL, -- 'user' или 'admin'
-                message TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
         
+        # Гарантируем статус главного супер-админа
         cursor.execute("""
             INSERT INTO users (email, status) 
             VALUES (%s, 'admin') 
             ON CONFLICT (email) DO UPDATE SET status = 'admin'
         """, (SUPER_ADMIN,))
         
+        # Заносим остальных начальных админов, если их еще нет в базе
         for adm in INITIAL_ADMINS:
             cursor.execute("""
                 INSERT INTO users (email, status) 
@@ -111,6 +106,8 @@ def get_user_status(email: str) -> str:
         return "guest"
     
     clean_email = email.lower()
+    
+    # Супер-админ всегда имеет роль admin
     if clean_email == SUPER_ADMIN:
         return "admin"
     
@@ -130,6 +127,7 @@ def get_user_status(email: str) -> str:
     conn.close()
     return "free"
 
+# Актуальная линейка моделей Google Gemini
 MODELS = ["gemini-3.1-flash-lite", "gemini-2.5-flash"]
 current_key_idx = 0
 current_model_idx = 0
@@ -177,6 +175,7 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
     api_keys = get_api_keys()
     if not api_keys:
+        print("ОШИБКА: Ни один API-ключ Gemini не найден в Environment Variables!")
         raise HTTPException(status_code=500, detail="API-ключи Gemini не найдены в переменные окружения Render.")
 
     num_keys = len(api_keys)
@@ -205,6 +204,7 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
                 return response.text
         except Exception as err:
             last_error = str(err)
+            print(f"Ошибка вызова Gemini API (Модель: {active_model}, Ключ №{current_key_idx % num_keys + 1}): {err}")
             current_model_idx += 1
             if current_model_idx >= num_models:
                 current_model_idx = 0
@@ -299,6 +299,7 @@ def admin_get_users(request: Request):
 @app.post("/api/admin/update-status")
 async def admin_update_status(request: Request):
     user_email = (request.session.get("user_email") or "").lower()
+    
     if get_user_status(user_email) != "admin":
         raise HTTPException(status_code=403, detail="Доступ запрещен")
     
@@ -307,18 +308,21 @@ async def admin_update_status(request: Request):
     new_status = body.get("status")
     
     is_super_admin = (user_email == SUPER_ADMIN)
+    
     allowed_statuses = ["free", "vip", "banned"]
     if is_super_admin:
         allowed_statuses.append("admin")
         
     if new_status not in allowed_statuses:
-        raise HTTPException(status_code=400, detail="Недопустимый статус.")
+        raise HTTPException(status_code=400, detail="Недопустимый статус для назначения.")
     
     if target_email == SUPER_ADMIN:
         raise HTTPException(status_code=400, detail="Нельзя изменить статус Главного администратора!")
 
-    if not is_super_admin and get_user_status(target_email) == "admin":
-        raise HTTPException(status_code=403, detail="Нельзя менять статус других админов.")
+    if not is_super_admin:
+        target_status = get_user_status(target_email)
+        if target_status == "admin":
+            raise HTTPException(status_code=403, detail="Обычный админ не может менять статус других админов.")
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -326,15 +330,16 @@ async def admin_update_status(request: Request):
     conn.commit()
     cursor.close()
     conn.close()
+    
     return {"success": True}
 
-# --- НОВАЯ СИСТЕМА ТИКЕТОВ И МИНИ-ЧАТА ---
+# --- API ПОДДЕРЖКИ (ТИКЕТЫ) ---
 
 @app.post("/api/tickets/create")
 async def create_ticket(request: Request):
     user_email = request.session.get("user_email")
     if not user_email:
-        raise HTTPException(status_code=401, detail="Авторизуйтесь через Google.")
+        raise HTTPException(status_code=401, detail="Войдите через Google, чтобы обратиться в поддержку.")
     
     body = await request.json()
     message = (body.get("message") or "").strip()
@@ -343,98 +348,34 @@ async def create_ticket(request: Request):
         
     conn = get_db_connection()
     cursor = conn.cursor()
-
-    # Проверяем, есть ли уже открытый тикет
-    cursor.execute("SELECT id FROM tickets WHERE user_email = %s AND status = 'open'", (user_email.lower(),))
-    existing = cursor.fetchone()
-    if existing:
-        cursor.close()
-        conn.close()
-        raise HTTPException(status_code=400, detail="У вас уже есть открытое обращение!")
-
-    cursor.execute("INSERT INTO tickets (user_email, status) VALUES (%s, 'open') RETURNING id", (user_email.lower(),))
-    ticket_id = cursor.fetchone()[0]
-
     cursor.execute(
-        "INSERT INTO ticket_messages (ticket_id, sender, message) VALUES (%s, 'user', %s)",
-        (ticket_id, message)
+        "INSERT INTO tickets (user_email, message, status) VALUES (%s, %s, 'open') RETURNING id",
+        (user_email.lower(), message)
     )
+    ticket_id = cursor.fetchone()[0]
     conn.commit()
     cursor.close()
     conn.close()
     
     return {"success": True, "ticket_id": ticket_id}
 
-@app.get("/api/tickets/active")
-def get_active_ticket(request: Request):
+@app.get("/api/tickets/my")
+def get_my_tickets(request: Request):
     user_email = request.session.get("user_email")
     if not user_email:
-        return {"ticket": None}
+        return {"tickets": []}
         
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, status, created_at FROM tickets WHERE user_email = %s AND status = 'open' ORDER BY id DESC LIMIT 1",
+        "SELECT id, message, admin_reply, status, created_at FROM tickets WHERE user_email = %s ORDER BY id DESC",
         (user_email.lower(),)
     )
-    row = cursor.fetchone()
-    
-    if not row:
-        cursor.close()
-        conn.close()
-        return {"ticket": None}
-
-    ticket_id = row[0]
-    cursor.execute(
-        "SELECT sender, message, created_at FROM ticket_messages WHERE ticket_id = %s ORDER BY id ASC",
-        (ticket_id,)
-    )
-    msg_rows = cursor.fetchall()
+    rows = cursor.fetchall()
     cursor.close()
     conn.close()
-
-    messages = [{"sender": m[0], "message": m[1], "created_at": str(m[2])} for m in msg_rows]
-    return {
-        "ticket": {
-            "id": ticket_id,
-            "status": row[1],
-            "created_at": str(row[2]),
-            "messages": messages
-        }
-    }
-
-@app.post("/api/tickets/send")
-async def send_ticket_message(request: Request):
-    user_email = request.session.get("user_email")
-    if not user_email:
-        raise HTTPException(status_code=401, detail="Авторизуйтесь.")
-
-    body = await request.json()
-    ticket_id = body.get("ticket_id")
-    message = (body.get("message") or "").strip()
-    if not message or not ticket_id:
-        raise HTTPException(status_code=400, detail="Заполните все поля.")
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
-    # Проверка, принадлежит ли тикет человеку
-    cursor.execute("SELECT status FROM tickets WHERE id = %s AND user_email = %s", (ticket_id, user_email.lower()))
-    t_row = cursor.fetchone()
-    if not t_row or t_row[0] == 'closed':
-        cursor.close()
-        conn.close()
-        raise HTTPException(status_code=400, detail="Тикет не найден или завершен.")
-
-    cursor.execute(
-        "INSERT INTO ticket_messages (ticket_id, sender, message) VALUES (%s, 'user', %s)",
-        (ticket_id, message)
-    )
-    cursor.execute("UPDATE tickets SET updated_at = CURRENT_TIMESTAMP WHERE id = %s", (ticket_id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return {"success": True}
+    return {"tickets": [{"id": r[0], "message": r[1], "admin_reply": r[2], "status": r[3], "created_at": str(r[4])} for r in rows]}
 
 @app.get("/api/admin/tickets")
 def admin_get_tickets(request: Request):
@@ -444,26 +385,12 @@ def admin_get_tickets(request: Request):
         
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, user_email, status, created_at, updated_at FROM tickets ORDER BY updated_at DESC")
-    tickets_rows = cursor.fetchall()
-
-    tickets = []
-    for t in tickets_rows:
-        t_id = t[0]
-        cursor.execute("SELECT sender, message, created_at FROM ticket_messages WHERE ticket_id = %s ORDER BY id ASC", (t_id,))
-        m_rows = cursor.fetchall()
-        msgs = [{"sender": m[0], "message": m[1], "created_at": str(m[2])} for m in m_rows]
-        tickets.append({
-            "id": t_id,
-            "user_email": t[1],
-            "status": t[2],
-            "created_at": str(t[3]),
-            "messages": msgs
-        })
-
+    cursor.execute("SELECT id, user_email, message, admin_reply, status, created_at FROM tickets ORDER BY id DESC")
+    rows = cursor.fetchall()
     cursor.close()
     conn.close()
-    return {"tickets": tickets}
+    
+    return {"tickets": [{"id": r[0], "user_email": r[1], "message": r[2], "admin_reply": r[3], "status": r[4], "created_at": str(r[5])} for r in rows]}
 
 @app.post("/api/admin/tickets/reply")
 async def admin_reply_ticket(request: Request):
@@ -475,25 +402,19 @@ async def admin_reply_ticket(request: Request):
     ticket_id = body.get("ticket_id")
     reply = (body.get("reply") or "").strip()
     close_ticket = body.get("close", False)
-
+    
+    new_status = "closed" if close_ticket else "replied"
+    
     conn = get_db_connection()
     cursor = conn.cursor()
-
-    if reply:
-        cursor.execute(
-            "INSERT INTO ticket_messages (ticket_id, sender, message) VALUES (%s, 'admin', %s)",
-            (ticket_id, reply)
-        )
-
-    new_status = 'closed' if close_ticket else 'open'
     cursor.execute(
-        "UPDATE tickets SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
-        (new_status, ticket_id)
+        "UPDATE tickets SET admin_reply = %s, status = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+        (reply, new_status, ticket_id)
     )
-    
     conn.commit()
     cursor.close()
     conn.close()
+    
     return {"success": True}
 
 @app.post("/api/chat")
@@ -507,7 +428,7 @@ async def chat_endpoint(
         status = get_user_status(user_email)
 
         if status == "banned":
-            raise HTTPException(status_code=403, detail="Ваш аккаунт заблокирован.")
+            raise HTTPException(status_code=403, detail="Ваш аккаунт заблокирован администратором.")
 
         if not user_email:
             guest_count = int(request.cookies.get("guest_requests", "0"))
@@ -517,7 +438,7 @@ async def chat_endpoint(
                 raise HTTPException(status_code=403, detail="Гости не могут отправлять файлы.")
         elif status == "free":
             if file:
-                raise HTTPException(status_code=403, detail="Отправка файлов только для VIP.")
+                raise HTTPException(status_code=403, detail="Отправка файлов и фото доступна только VIP-пользователям.")
 
             today = time.strftime("%Y-%m-%d")
             conn = get_db_connection()
@@ -535,7 +456,7 @@ async def chat_endpoint(
             if req_count >= 50:
                 cursor.close()
                 conn.close()
-                raise HTTPException(status_code=403, detail="Исчерпан суточный лимит (50 запросов).")
+                raise HTTPException(status_code=403, detail="Исчерпан суточный лимит (50 запросов) для Free.")
                 
             cursor.execute("UPDATE users SET requests_count = %s WHERE email = %s", (req_count + 1, user_email.lower()))
             conn.commit()
@@ -562,6 +483,7 @@ async def chat_endpoint(
     except Exception as exc:
         print("--- EXCEPTION IN /api/chat ---")
         traceback.print_exc()
+        print("------------------------------")
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {exc}")
 
 HTML_TEMPLATE = """
@@ -702,7 +624,7 @@ HTML_TEMPLATE = """
         .banned-box h2 { color: #f87171; font-size: 20px; margin-bottom: 12px; }
         .banned-box p { color: var(--text-muted); font-size: 13.5px; line-height: 1.5; margin-bottom: 20px; }
 
-        /* ОКНА МОДАЛОК */
+        /* ОКНО АДМИН ПАНЕЛИ */
         #admin-modal, #user-support-modal {
             display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
             background: rgba(4, 5, 8, 0.85); backdrop-filter: blur(8px); z-index: 100;
@@ -742,7 +664,7 @@ HTML_TEMPLATE = """
         }
         .filter-btn.active { background: rgba(168, 85, 247, 0.2); border-color: rgba(168, 85, 247, 0.4); color: #fff; }
 
-        .admin-content { padding: 14px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 10px; }
+        .admin-content { padding: 14px; overflow-y: auto; flex: 1; }
         .admin-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
         .admin-table th, .admin-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border-color); color: #f1f5f9; }
         .admin-table th { color: var(--text-muted); font-weight: 600; background: rgba(255,255,255,0.02); }
@@ -755,29 +677,23 @@ HTML_TEMPLATE = """
         .badge-open { background: rgba(59, 130, 246, 0.2); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.4); }
         .badge-closed { background: rgba(100, 116, 139, 0.2); color: #cbd5e1; }
 
+        .admin-actions-cell { display: flex; gap: 6px; align-items: center; }
         .admin-actions-cell select {
             background: #1a1f2c; border: 1px solid rgba(168, 85, 247, 0.3); color: #ffffff;
             padding: 4px 6px; border-radius: 6px; font-size: 11px; outline: none; cursor: pointer;
         }
 
-        /* ЧАТ В ТИКЕТЕ */
-        .ticket-chat-box {
-            display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto;
-            background: rgba(0,0,0,0.3); padding: 10px; border-radius: 12px; border: 1px solid var(--border-color);
-        }
-        .t-msg { padding: 8px 12px; border-radius: 10px; font-size: 12px; max-width: 85%; word-break: break-word; }
-        .t-msg-user { background: rgba(99, 102, 241, 0.2); color: #fff; align-self: flex-start; border: 1px solid rgba(99, 102, 241, 0.3); }
-        .t-msg-admin { background: rgba(168, 85, 247, 0.25); color: #fff; align-self: flex-end; border: 1px solid rgba(168, 85, 247, 0.4); }
-
+        /* ТИКЕТЫ КАРТОЧКИ */
         .ticket-card {
             background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color);
-            border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;
+            border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 8px;
         }
         .ticket-header { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-muted); }
-        .ticket-reply-input-row { display: flex; gap: 8px; margin-top: 4px; }
-        .ticket-reply-input-row input {
-            flex: 1; background: rgba(0,0,0,0.4); border: 1px solid var(--border-color); color: #fff;
-            padding: 8px 12px; border-radius: 8px; font-size: 12px; outline: none;
+        .ticket-msg { font-size: 12.5px; color: #f1f5f9; line-height: 1.4; background: rgba(0,0,0,0.2); padding: 8px 10px; border-radius: 8px; }
+        .ticket-reply-box { margin-top: 4px; display: flex; flex-direction: column; gap: 6px; }
+        .ticket-reply-box textarea {
+            background: rgba(0,0,0,0.4); border: 1px solid var(--border-color); color: #fff;
+            padding: 8px; border-radius: 8px; font-size: 12px; outline: none; resize: vertical; min-height: 50px;
         }
         .btn-ticket-action {
             padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s;
@@ -900,8 +816,15 @@ HTML_TEMPLATE = """
                 <h3>💬 Служба поддержки Rubinov AI</h3>
                 <button class="admin-close" onclick="toggleUserSupportModal(false)">×</button>
             </div>
-            <div class="admin-content" id="user-support-content">
-                Загрузка...
+            <div class="admin-content">
+                <div style="margin-bottom: 14px;">
+                    <label style="font-size: 11.5px; color: var(--text-muted); display: block; margin-bottom: 6px;">Опишите вашу проблему или вопрос:</label>
+                    <textarea id="user-ticket-input" style="width: 100%; background: rgba(0,0,0,0.4); border: 1px solid var(--border-color); color: #fff; padding: 10px; border-radius: 10px; font-size: 12px; outline: none; resize: vertical; min-height: 70px;" placeholder="Здравствуйте, у меня возник вопрос по..."></textarea>
+                    <button onclick="submitUserTicket()" class="btn-action" style="margin-top: 8px; width: 100%;">Отправить вопрос</button>
+                </div>
+                <hr style="border: none; border-top: 1px solid var(--border-color); margin: 14px 0;">
+                <h4 style="font-size: 12px; color: #fff; margin-bottom: 10px;">Ваши обращения:</h4>
+                <div id="user-tickets-list">Загрузка...</div>
             </div>
         </div>
     </div>
@@ -919,6 +842,7 @@ HTML_TEMPLATE = """
                 <button class="tab-btn" id="tab-tickets-btn" onclick="switchAdminTab('tickets')">💬 ПОДДЕРЖКА (Тикеты)</button>
             </div>
 
+            <!-- Вкладка ПОЛЬЗОВАТЕЛИ -->
             <div id="admin-tab-users" style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
                 <div class="admin-filters">
                     <button class="filter-btn active" onclick="filterAdminUsers('all', this)">Все</button>
@@ -944,10 +868,11 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
+            <!-- Вкладка ПОДДЕРЖКА (ТИКЕТЫ) -->
             <div id="admin-tab-tickets" style="display: none; flex-direction: column; flex: 1; overflow: hidden;">
                 <div class="admin-filters">
-                    <button class="filter-btn active" onclick="filterAdminTickets('open', this)">🔵 Активные тикеты</button>
-                    <button class="filter-btn" onclick="filterAdminTickets('all', this)">📋 Все тикеты</button>
+                    <button class="filter-btn active" onclick="filterAdminTickets('open', this)">🔵 Актуальные тикеты</button>
+                    <button class="filter-btn" onclick="filterAdminTickets('all', this)">📋 Все обращения</button>
                 </div>
                 <div class="admin-content" id="admin-tickets-list">
                     Загрузка тикетов...
@@ -1033,10 +958,6 @@ HTML_TEMPLATE = """
         let myCurrentStatus = 'guest';
         let windowCurrentUserEmail = '';
 
-        let userSupportModalOpen = false;
-        let adminModalOpen = false;
-        let activeAdminTab = 'users';
-
         const SUPER_ADMIN_EMAIL = "8914rpwtutw@gmail.com".toLowerCase();
 
         async function checkUserStatusRealtime() {
@@ -1054,14 +975,7 @@ HTML_TEMPLATE = """
                 }
             } catch(e) {}
         }
-
-        // Автообновление раз в 3 секунды для тикетов и статусов
-        setInterval(() => {
-            checkUserStatusRealtime();
-            if (userSupportModalOpen) loadActiveUserTicket();
-            if (adminModalOpen && activeAdminTab === 'tickets') loadAdminTickets();
-        }, 3000);
-
+        setInterval(checkUserStatusRealtime, 8000);
         checkUserStatusRealtime();
 
         if (chats.length === 0) {
@@ -1090,11 +1004,9 @@ HTML_TEMPLATE = """
 
         function toggleAdminModal(show) {
             const modal = document.getElementById('admin-modal');
-            adminModalOpen = show;
             if (show) {
                 modal.classList.add('active');
-                if(activeAdminTab === 'users') loadAdminUsers();
-                else loadAdminTickets();
+                loadAdminUsers();
             } else {
                 modal.classList.remove('active');
             }
@@ -1105,7 +1017,6 @@ HTML_TEMPLATE = """
         }
 
         function switchAdminTab(tab) {
-            activeAdminTab = tab;
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             if (tab === 'users') {
                 document.getElementById('tab-users-btn').classList.add('active');
@@ -1122,6 +1033,7 @@ HTML_TEMPLATE = """
 
         async function loadAdminUsers() {
             const tbody = document.getElementById('admin-users-list');
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Загрузка...</td></tr>';
             try {
                 const res = await fetch('/api/admin/users');
                 if (!res.ok) throw new Error();
@@ -1208,9 +1120,10 @@ HTML_TEMPLATE = """
             }
         }
 
-        /* --- АДМИН ПАНЕЛЬ: ТИКЕТЫ С МИНИ-ЧАТОМ --- */
+        /* АДМИН - ТИКЕТЫ ПОДДЕРЖКИ */
         async function loadAdminTickets() {
             const container = document.getElementById('admin-tickets-list');
+            container.innerHTML = 'Загрузка тикетов...';
             try {
                 const res = await fetch('/api/admin/tickets');
                 if (!res.ok) throw new Error();
@@ -1234,36 +1147,32 @@ HTML_TEMPLATE = """
             container.innerHTML = '';
 
             const filtered = allTicketsCache.filter(t => {
-                if (currentTicketFilter === 'open') return t.status === 'open';
+                if (currentTicketFilter === 'open') return t.status === 'open' || t.status === 'replied';
                 return true;
             });
 
             if (filtered.length === 0) {
-                container.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding: 20px;">Тикетов нет.</div>';
+                container.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding: 20px;">Нет актуальных тикетов.</div>';
                 return;
             }
 
             filtered.forEach(t => {
                 const card = document.createElement('div');
                 card.className = 'ticket-card';
-                
-                let msgsHtml = t.messages.map(m => `
-                    <div class="t-msg ${m.sender === 'admin' ? 't-msg-admin' : 't-msg-user'}">
-                        <b>${m.sender === 'admin' ? 'Администратор' : escapeHtml(t.user_email)}:</b><br>${escapeHtml(m.message)}
-                    </div>
-                `).join('');
-
                 card.innerHTML = `
                     <div class="ticket-header">
                         <span><b>Тикет #${t.id}</b> | ${escapeHtml(t.user_email)}</span>
-                        <span class="badge badge-${t.status}">${t.status === 'open' ? 'Активен' : 'Завершен'}</span>
+                        <span class="badge badge-${t.status}">${t.status === 'open' ? 'Открыт' : (t.status === 'replied' ? 'Отвечен' : 'Завершен')}</span>
                     </div>
-                    <div class="ticket-chat-box">${msgsHtml}</div>
-                    ${t.status === 'open' ? `
-                        <div class="ticket-reply-input-row">
-                            <input type="text" id="admin-reply-input-${t.id}" placeholder="Ответить в тикет..." onkeydown="if(event.key==='Enter') sendAdminReply(${t.id}, false)" />
-                            <button class="btn-ticket-action btn-reply" onclick="sendAdminReply(${t.id}, false)">Отправить</button>
-                            <button class="btn-ticket-action btn-close-ticket" onclick="sendAdminReply(${t.id}, true)">Завершить</button>
+                    <div class="ticket-msg"><b>Пользователь:</b> ${escapeHtml(t.message)}</div>
+                    ${t.admin_reply ? `<div class="ticket-msg" style="border-left:2px solid #a855f7;"><b>Ваш ответ:</b> ${escapeHtml(t.admin_reply)}</div>` : ''}
+                    ${t.status !== 'closed' ? `
+                        <div class="ticket-reply-box">
+                            <textarea id="reply-input-${t.id}" placeholder="Напишите ответ пользователю...">${escapeHtml(t.admin_reply || '')}</textarea>
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn-ticket-action btn-reply" onclick="sendTicketReply(${t.id}, false)">Отправить ответ</button>
+                                <button class="btn-ticket-action btn-close-ticket" onclick="sendTicketReply(${t.id}, true)">Завершить тикет</button>
+                            </div>
                         </div>
                     ` : ''}
                 `;
@@ -1271,92 +1180,73 @@ HTML_TEMPLATE = """
             });
         }
 
-        async function sendAdminReply(ticketId, closeTicket) {
-            const input = document.getElementById(`admin-reply-input-${ticketId}`);
-            const text = input ? input.value.trim() : '';
-            if (!text && !closeTicket) return;
+        async function sendTicketReply(ticketId, closeTicket) {
+            const replyInput = document.getElementById(`reply-input-${ticketId}`);
+            const replyText = replyInput ? replyInput.value.trim() : '';
 
             try {
                 const res = await fetch('/api/admin/tickets/reply', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ticket_id: ticketId, reply: text, close: closeTicket })
+                    body: JSON.stringify({ ticket_id: ticketId, reply: replyText, close: closeTicket })
                 });
                 if (res.ok) {
-                    if (input) input.value = '';
                     loadAdminTickets();
                 } else {
-                    alert('Ошибка сохранения.');
+                    alert('Ошибка сохранения ответа.');
                 }
             } catch(e) {
                 alert('Ошибка соединения.');
             }
         }
 
-        /* --- ПОЛЬЗОВАТЕЛЬ: АКТИВНЫЙ ТИКЕТ И МИНИ-ЧАТ --- */
+        /* ПОЛЬЗОВАТЕЛЬ - ПОДДЕРЖКА */
         function toggleUserSupportModal(show) {
             const modal = document.getElementById('user-support-modal');
-            userSupportModalOpen = show;
             if (show) {
                 if (!windowCurrentUserEmail) {
                     alert('Для обращения в поддержку необходимо войти через Google.');
-                    userSupportModalOpen = false;
                     return;
                 }
                 modal.classList.add('active');
-                loadActiveUserTicket();
+                loadMyTickets();
             } else {
                 modal.classList.remove('active');
             }
         }
 
-        async function loadActiveUserTicket() {
-            const container = document.getElementById('user-support-content');
+        async function loadMyTickets() {
+            const container = document.getElementById('user-tickets-list');
+            container.innerHTML = 'Загрузка...';
             try {
-                const res = await fetch('/api/tickets/active');
+                const res = await fetch('/api/tickets/my');
                 const data = await res.json();
-                
-                if (!data.ticket) {
-                    container.innerHTML = `
-                        <div style="text-align:center; padding: 20px 10px;">
-                            <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">У вас нет активных обращений. В случае проблем создайте новый тикет.</p>
-                            <textarea id="new-user-ticket-input" style="width: 100%; background: rgba(0,0,0,0.4); border: 1px solid var(--border-color); color: #fff; padding: 10px; border-radius: 10px; font-size: 12px; outline: none; resize: vertical; min-height: 80px;" placeholder="Опишите вашу проблему..."></textarea>
-                            <button onclick="createNewUserTicket()" class="btn-action" style="margin-top: 12px; width: 100%;">Создать тикет</button>
-                        </div>
-                    `;
+                if (data.tickets.length === 0) {
+                    container.innerHTML = '<span style="color:var(--text-muted); font-size:12px;">У вас пока нет обращений.</span>';
                     return;
                 }
-
-                const ticket = data.ticket;
-                let msgsHtml = ticket.messages.map(m => `
-                    <div class="t-msg ${m.sender === 'user' ? 't-msg-user' : 't-msg-admin'}">
-                        <b>${m.sender === 'user' ? 'Вы' : 'Поддержка Rubinov AI'}:</b><br>${escapeHtml(m.message)}
-                    </div>
-                `).join('');
-
-                container.innerHTML = `
-                    <div class="ticket-header" style="margin-bottom: 8px;">
-                        <span><b>Обращение #${ticket.id}</b></span>
-                        <span class="badge badge-open">В процессе</span>
-                    </div>
-                    <div class="ticket-chat-box" id="user-ticket-chat-box" style="height: 320px;">${msgsHtml}</div>
-                    <div class="ticket-reply-input-row" style="margin-top: 10px;">
-                        <input type="text" id="user-msg-input" placeholder="Введите сообщение..." onkeydown="if(event.key==='Enter') sendUserTicketMsg(${ticket.id})" />
-                        <button class="btn-ticket-action btn-reply" onclick="sendUserTicketMsg(${ticket.id})">Отправить</button>
-                    </div>
-                `;
-
-                const chatBox = document.getElementById('user-ticket-chat-box');
-                if (chatBox) chatBox.scrollTop = chatBox.scrollHeight;
-
+                container.innerHTML = '';
+                data.tickets.forEach(t => {
+                    const item = document.createElement('div');
+                    item.className = 'ticket-card';
+                    item.innerHTML = `
+                        <div class="ticket-header">
+                            <span><b>Вопрос #${t.id}</b></span>
+                            <span class="badge badge-${t.status}">${t.status === 'open' ? 'В обработке' : (t.status === 'replied' ? 'Есть ответ' : 'Завершен')}</span>
+                        </div>
+                        <div class="ticket-msg">${escapeHtml(t.message)}</div>
+                        ${t.admin_reply ? `<div class="ticket-msg" style="border-left:2px solid #a855f7; background:rgba(168,85,247,0.1);"><b>Ответ поддержки:</b> ${escapeHtml(t.admin_reply)}</div>` : ''}
+                    `;
+                    container.appendChild(item);
+                });
             } catch(e) {
-                container.innerHTML = '<span style="color:#f87171; font-size:12px;">Ошибка загрузки тикета.</span>';
+                container.innerHTML = '<span style="color:#f87171; font-size:12px;">Ошибка загрузки.</span>';
             }
         }
 
-        async function createNewUserTicket() {
-            const input = document.getElementById('new-user-ticket-input');
-            const message = input ? input.value.trim() : '';
+        async function submitUserTicket() {
+            const input = document.getElementById('user-ticket-input');
+            const message = input.value.trim();
             if (!message) return alert('Введите текст сообщения.');
 
             try {
@@ -1366,32 +1256,11 @@ HTML_TEMPLATE = """
                     body: JSON.stringify({ message })
                 });
                 if (res.ok) {
-                    loadActiveUserTicket();
+                    input.value = '';
+                    loadMyTickets();
                 } else {
                     const data = await res.json();
                     alert(data.detail || 'Ошибка отправки.');
-                }
-            } catch(e) {
-                alert('Ошибка соединения.');
-            }
-        }
-
-        async function sendUserTicketMsg(ticketId) {
-            const input = document.getElementById('user-msg-input');
-            const message = input ? input.value.trim() : '';
-            if (!message) return;
-
-            try {
-                const res = await fetch('/api/tickets/send', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ticket_id: ticketId, message })
-                });
-                if (res.ok) {
-                    input.value = '';
-                    loadActiveUserTicket();
-                } else {
-                    alert('Не удалось отправить сообщение.');
                 }
             } catch(e) {
                 alert('Ошибка соединения.');
