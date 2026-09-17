@@ -1,7 +1,7 @@
 import os
 import json
 import time
-import sqlite3
+import psycopg2
 from typing import Optional
 from fastapi import FastAPI, HTTPException, File, Form, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,11 +18,11 @@ app = FastAPI()
 # Поддержка HTTPS заголовков прокси Render
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
 
-# Защищенные сессии с криптографическим ключом (защита от подделки email через консоль)
+# Защищенные сессии с криптографическим ключом
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("SESSION_SECRET_KEY", "rubinov-ai-super-secure-secret-key-2026-xyz"),
-    https_only=True, # Требует HTTPS на Render
+    https_only=True,
     same_site="lax"
 )
 
@@ -33,31 +33,41 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# --- Настройка базы данных пользователей (SQLite) ---
-DB_FILE = "rubinov_users.db"
+# --- Настройка базы данных PostgreSQL (Neon) ---
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+def get_db_connection():
+    if not DATABASE_URL:
+        raise HTTPException(status_code=500, detail="DATABASE_URL не настроена в Environment Variables.")
+    return psycopg2.connect(DATABASE_URL)
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            email TEXT PRIMARY KEY,
-            status TEXT DEFAULT 'free', -- 'free', 'vip', 'banned'
-            requests_count INTEGER DEFAULT 0,
-            last_reset_date TEXT DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
     try:
-        cursor.execute("ALTER TABLE users ADD COLUMN requests_count INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cursor.execute("ALTER TABLE users ADD COLUMN last_reset_date TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
-    conn.commit()
-    conn.close()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                email TEXT PRIMARY KEY,
+                status TEXT DEFAULT 'free',
+                requests_count INTEGER DEFAULT 0,
+                last_reset_date TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Автоматическое создание/восстановление главного администратора
+        admin_mail = os.getenv("ADMIN_EMAIL", "8914rpwtutw@gmail.com").lower()
+        cursor.execute("""
+            INSERT INTO users (email, status) 
+            VALUES (%s, 'vip') 
+            ON CONFLICT (email) DO NOTHING
+        """, (admin_mail,))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"Ошибка инициализации БД: {e}")
 
 init_db()
 
@@ -69,17 +79,19 @@ def get_user_status(email: str) -> str:
     if email.lower() == ADMIN_EMAIL.lower():
         return "admin"
     
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT status FROM users WHERE email = ?", (email.lower(),))
+    cursor.execute("SELECT status FROM users WHERE email = %s", (email.lower(),))
     row = cursor.fetchone()
     
     if row:
+        cursor.close()
         conn.close()
-        return row[0] # 'free', 'vip', 'banned'
+        return row[0]
     
-    cursor.execute("INSERT OR IGNORE INTO users (email, status) VALUES (?, 'free')", (email.lower(),))
+    cursor.execute("INSERT INTO users (email, status) VALUES (%s, 'free') ON CONFLICT (email) DO NOTHING", (email.lower(),))
     conn.commit()
+    cursor.close()
     conn.close()
     return "free"
 
@@ -149,7 +161,8 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
         try:
             client = get_gemini_client(active_key)
             response = client.models.generate_content(model=active_model, contents=contents)
-            return response.text
+            if response and response.text:
+                return response.text
         except APIError as e:
             if e.code in [503, 429] or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e):
                 current_model_idx += 1
@@ -160,7 +173,11 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
                 continue
             break
         except Exception:
-            break
+            current_model_idx += 1
+            if current_model_idx >= num_models:
+                current_model_idx = 0
+                current_key_idx = (current_key_idx + 1) % num_keys
+            continue
 
     raise HTTPException(status_code=500, detail="Сервис ИИ перегружен. Повторите попытку.")
 
@@ -168,7 +185,6 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 def health_check():
     return {"status": "ok"}
 
-# --- Маршруты Google OAuth ---
 @app.get("/auth/google")
 def login_google(request: Request):
     if not GOOGLE_CLIENT_ID:
@@ -217,8 +233,6 @@ async def auth_google_callback(request: Request, code: Optional[str] = None, err
         user_email = user_info.get("email")
 
     get_user_status(user_email)
-
-    # Сохраняем email строго в защищенную криптографическую сессию
     request.session["user_email"] = user_email
 
     return RedirectResponse(url=str(request.base_url), status_code=303)
@@ -234,20 +248,20 @@ def status_check(request: Request):
     status = get_user_status(user_email)
     return {"status": status, "email": user_email}
 
-# --- API Админ-панели ---
 @app.get("/api/admin/users")
 def admin_get_users(request: Request):
     user_email = request.session.get("user_email")
     if get_user_status(user_email) != "admin":
         raise HTTPException(status_code=403, detail="Доступ запрещен")
     
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT email, status, requests_count, created_at FROM users ORDER BY created_at DESC")
     rows = cursor.fetchall()
+    cursor.close()
     conn.close()
     
-    return {"users": [{"email": r[0], "status": r[1], "requests_count": r[2], "created_at": r[3]} for r in rows]}
+    return {"users": [{"email": r[0], "status": r[1], "requests_count": r[2], "created_at": str(r[3])} for r in rows]}
 
 @app.post("/api/admin/update-status")
 async def admin_update_status(request: Request):
@@ -265,10 +279,11 @@ async def admin_update_status(request: Request):
     if target_email.lower() == ADMIN_EMAIL.lower():
         raise HTTPException(status_code=400, detail="Нельзя изменить статус главного администратора")
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET status = ? WHERE email = ?", (new_status, target_email.lower()))
+    cursor.execute("UPDATE users SET status = %s WHERE email = %s", (new_status, target_email.lower()))
     conn.commit()
+    cursor.close()
     conn.close()
     
     return {"success": True}
@@ -296,24 +311,26 @@ async def chat_endpoint(
             raise HTTPException(status_code=403, detail="Отправка файлов и фото доступна только VIP-пользователям.")
 
         today = time.strftime("%Y-%m-%d")
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT requests_count, last_reset_date FROM users WHERE email = ?", (user_email.lower(),))
+        cursor.execute("SELECT requests_count, last_reset_date FROM users WHERE email = %s", (user_email.lower(),))
         row = cursor.fetchone()
         
         req_count, last_date = (row[0], row[1]) if row else (0, "")
         
         if last_date != today:
             req_count = 0
-            cursor.execute("UPDATE users SET requests_count = 0, last_reset_date = ? WHERE email = ?", (today, user_email.lower()))
+            cursor.execute("UPDATE users SET requests_count = 0, last_reset_date = %s WHERE email = %s", (today, user_email.lower()))
             conn.commit()
             
         if req_count >= 50:
+            cursor.close()
             conn.close()
             raise HTTPException(status_code=403, detail="Исчерпан суточный лимит (50 запросов) для Free.")
             
-        cursor.execute("UPDATE users SET requests_count = ? WHERE email = ?", (req_count + 1, user_email.lower()))
+        cursor.execute("UPDATE users SET requests_count = %s WHERE email = %s", (req_count + 1, user_email.lower()))
         conn.commit()
+        cursor.close()
         conn.close()
 
     if not prompt.strip() and not file:
@@ -366,18 +383,12 @@ HTML_TEMPLATE = """
         body { display: flex; position: relative; }
 
         body::before {
-            content: '';
-            position: fixed;
-            top: -15vh; left: -15vw;
-            width: 55vw; height: 55vh;
+            content: ''; position: fixed; top: -15vh; left: -15vw; width: 55vw; height: 55vh;
             background: radial-gradient(circle, rgba(99, 102, 241, 0.07) 0%, rgba(168, 85, 247, 0.02) 60%, transparent 80%);
             z-index: 0; pointer-events: none; filter: blur(80px);
         }
         body::after {
-            content: '';
-            position: fixed;
-            bottom: -15vh; right: -15vw;
-            width: 55vw; height: 55vh;
+            content: ''; position: fixed; bottom: -15vh; right: -15vw; width: 55vw; height: 55vh;
             background: radial-gradient(circle, rgba(168, 85, 247, 0.06) 0%, rgba(236, 72, 153, 0.01) 60%, transparent 80%);
             z-index: 0; pointer-events: none; filter: blur(80px);
         }
@@ -385,27 +396,20 @@ HTML_TEMPLATE = """
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 20px; }
-        ::-webkit-scrollbar-thumb:hover { background: rgba(168, 85, 247, 0.3); }
 
         #sidebar-overlay {
-            display: none; position: fixed; top: 0; left: 0;
-            width: 100vw; height: 100dvh;
-            background: rgba(4, 5, 8, 0.7); backdrop-filter: blur(6px);
-            z-index: 40; opacity: 0; transition: opacity 0.3s ease;
+            display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
+            background: rgba(4, 5, 8, 0.7); backdrop-filter: blur(6px); z-index: 40; opacity: 0; transition: opacity 0.3s ease;
         }
         #sidebar-overlay.active { display: block; opacity: 1; }
 
         #sidebar { 
-            width: 280px; min-width: 280px;
-            background: var(--bg-sidebar); backdrop-filter: blur(24px);
-            -webkit-backdrop-filter: blur(24px);
-            border-right: 1px solid var(--border-color); 
-            display: flex; flex-direction: column; padding: 20px 14px; 
-            z-index: 50; height: 100dvh;
+            width: 280px; min-width: 280px; background: var(--bg-sidebar); backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px); border-right: 1px solid var(--border-color); 
+            display: flex; flex-direction: column; padding: 20px 14px; z-index: 50; height: 100dvh;
             transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.3s cubic-bezier(0.16, 1, 0.3, 1);
             box-shadow: 15px 0 40px rgba(0, 0, 0, 0.4);
         }
-        
         body.sidebar-collapsed #sidebar { margin-left: -280px; }
 
         .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; padding: 0 4px; }
@@ -434,12 +438,11 @@ HTML_TEMPLATE = """
             color: #ffffff; box-shadow: 0 0 20px rgba(168, 85, 247, 0.08); 
         }
         .chat-item:hover { background: rgba(255, 255, 255, 0.04); border-color: var(--border-hover); color: #ffffff; }
-        .chat-item .close-btn { color: var(--text-muted); font-size: 14px; cursor: pointer; border-radius: 6px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
+        .chat-item .close-btn { color: var(--text-muted); font-size: 14px; cursor: pointer; border-radius: 6px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; }
         .chat-item .close-btn:hover { color: #f87171; background: rgba(248, 113, 113, 0.15); }
 
         .sidebar-footer { font-size: 11px; color: var(--text-muted); display: flex; flex-direction: column; gap: 8px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border-color); }
         .footer-info { display: flex; align-items: center; justify-content: space-between; width: 100%; }
-        .footer-left-status { display: flex; align-items: center; gap: 8px; }
         .status-dot { width: 7px; height: 7px; background: #a855f7; border-radius: 50%; box-shadow: 0 0 10px rgba(168, 85, 247, 0.8); }
 
         .btn-google-login {
@@ -457,9 +460,7 @@ HTML_TEMPLATE = """
         }
         .btn-admin-panel:hover { background: rgba(168, 85, 247, 0.25); color: #fff; }
 
-        .status-badge {
-            padding: 2px 6px; border-radius: 6px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; display: inline-block; margin-left: 4px;
-        }
+        .status-badge { padding: 2px 6px; border-radius: 6px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; display: inline-block; margin-left: 4px; }
         .badge-vip { background: rgba(168, 85, 247, 0.25); color: #e9d5ff; border: 1px solid rgba(168,85,247,0.4); }
         .badge-free { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.2); }
         .badge-admin { background: rgba(234, 179, 8, 0.25); color: #fde047; border: 1px solid rgba(234,179,8,0.4); }
@@ -485,15 +486,13 @@ HTML_TEMPLATE = """
         }
         #admin-modal.active { display: flex; }
         .admin-box {
-            background: #0d1018; border: 1px solid rgba(168, 85, 247, 0.3);
-            border-radius: 20px; width: 100%; max-width: 750px; max-height: 90dvh;
-            display: flex; flex-direction: column; overflow: hidden;
+            background: #0d1018; border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 20px;
+            width: 100%; max-width: 750px; max-height: 90dvh; display: flex; flex-direction: column; overflow: hidden;
             box-shadow: 0 20px 50px rgba(0,0,0,0.8);
         }
         .admin-header {
             padding: 14px 18px; border-bottom: 1px solid var(--border-color);
-            display: flex; justify-content: space-between; align-items: center;
-            background: rgba(18, 21, 31, 0.8);
+            display: flex; justify-content: space-between; align-items: center; background: rgba(18, 21, 31, 0.8);
         }
         .admin-header h3 { font-size: 14px; color: #fff; font-weight: 700; }
         .admin-close { background: none; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; }
@@ -504,9 +503,8 @@ HTML_TEMPLATE = """
             border-bottom: 1px solid var(--border-color); flex-wrap: wrap;
         }
         .filter-btn {
-            background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color);
-            color: var(--text-muted); padding: 5px 10px; border-radius: 8px; font-size: 11px;
-            font-weight: 600; cursor: pointer; transition: all 0.2s;
+            background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-muted);
+            padding: 5px 10px; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s;
         }
         .filter-btn.active { background: rgba(168, 85, 247, 0.2); border-color: rgba(168, 85, 247, 0.4); color: #fff; }
 
@@ -522,14 +520,13 @@ HTML_TEMPLATE = """
         
         .admin-actions-cell { display: flex; gap: 6px; align-items: center; }
         .admin-actions-cell select {
-            background: #1a1f2c; border: 1px solid rgba(168, 85, 247, 0.3);
-            color: #ffffff; padding: 4px 6px; border-radius: 6px; font-size: 11px; outline: none; cursor: pointer;
+            background: #1a1f2c; border: 1px solid rgba(168, 85, 247, 0.3); color: #ffffff;
+            padding: 4px 6px; border-radius: 6px; font-size: 11px; outline: none; cursor: pointer;
         }
         .btn-unban {
             background: rgba(34, 197, 94, 0.2); border: 1px solid rgba(34, 197, 94, 0.4);
             color: #86efac; padding: 4px 8px; border-radius: 6px; font-size: 10.5px; font-weight: 600; cursor: pointer;
         }
-        .btn-unban:hover { background: rgba(34, 197, 94, 0.35); }
 
         #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100dvh; overflow: hidden; z-index: 1; }
         
@@ -539,18 +536,15 @@ HTML_TEMPLATE = """
             padding: 0 20px; background: rgba(4, 5, 8, 0.5); backdrop-filter: blur(16px); z-index: 10;
         }
         .header-left { display: flex; align-items: center; gap: 12px; }
-        
         .menu-toggle { 
             background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); 
-            color: #ffffff; border-radius: 12px; padding: 8px; cursor: pointer; 
-            display: flex; align-items: center; justify-content: center;
+            color: #ffffff; border-radius: 12px; padding: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center;
         }
         #chat-header h3 { font-size: 14px; font-weight: 600; color: #ffffff; }
 
         #chat-container { 
             flex: 1; overflow-y: auto; padding: 20px 20px 140px 20px; 
-            display: flex; flex-direction: column; gap: 20px; 
-            max-width: 900px; width: 100%; margin: 0 auto; position: relative; z-index: 2;
+            display: flex; flex-direction: column; gap: 20px; max-width: 900px; width: 100%; margin: 0 auto; position: relative; z-index: 2;
         }
 
         .welcome-screen {
@@ -559,9 +553,8 @@ HTML_TEMPLATE = """
             display: flex; flex-direction: column; align-items: center; gap: 16px;
         }
         .welcome-avatar-glow {
-            padding: 20px; border-radius: 28px;
-            background: rgba(168, 85, 247, 0.04); border: 1px solid rgba(168, 85, 247, 0.15);
-            box-shadow: 0 0 50px rgba(168, 85, 247, 0.12);
+            padding: 20px; border-radius: 28px; background: rgba(168, 85, 247, 0.04);
+            border: 1px solid rgba(168, 85, 247, 0.15); box-shadow: 0 0 50px rgba(168, 85, 247, 0.12);
         }
         .welcome-avatar-svg { width: 60px; height: 60px; filter: drop-shadow(0 0 18px rgba(168, 85, 247, 0.6)); }
         .welcome-screen h1 { font-size: 22px; font-weight: 700; color: #ffffff; }
@@ -572,14 +565,12 @@ HTML_TEMPLATE = """
         .msg-row.bot-row { align-items: flex-start; }
 
         .msg-user { 
-            background: var(--user-msg-bg); color: #ffffff; 
-            border: 1px solid rgba(168, 85, 247, 0.22); border-radius: 18px 18px 4px 18px; 
-            padding: 12px 16px; font-size: 13px; line-height: 1.5; max-width: 85%; word-break: break-word; 
+            background: var(--user-msg-bg); color: #ffffff; border: 1px solid rgba(168, 85, 247, 0.22); 
+            border-radius: 18px 18px 4px 18px; padding: 12px 16px; font-size: 13px; line-height: 1.5; max-width: 85%; word-break: break-word; 
         }
         .msg-bot { 
-            background: var(--bot-msg-bg); border: 1px solid var(--border-color); 
-            color: #e2e8f0; border-radius: 18px 18px 18px 4px; 
-            padding: 16px 20px; font-size: 13px; line-height: 1.6; max-width: 90%; word-break: break-word; 
+            background: var(--bot-msg-bg); border: 1px solid var(--border-color); color: #e2e8f0; 
+            border-radius: 18px 18px 18px 4px; padding: 16px 20px; font-size: 13px; line-height: 1.6; max-width: 90%; word-break: break-word; 
         }
         .msg-bot code { background: rgba(255, 255, 255, 0.06); padding: 2px 6px; border-radius: 6px; font-family: monospace; font-size: 11.5px; color: #f472b6; }
         .msg-bot pre { background: #020305; padding: 12px; border-radius: 10px; overflow-x: auto; margin: 10px 0; border: 1px solid var(--border-color); }
@@ -588,8 +579,7 @@ HTML_TEMPLATE = """
 
         .loader-box {
             display: flex; align-items: center; gap: 12px; background: var(--bot-msg-bg);
-            border: 1px solid var(--border-color); border-radius: 18px 18px 18px 4px;
-            padding: 12px 18px; font-size: 13px; color: var(--text-muted);
+            border: 1px solid var(--border-color); border-radius: 18px 18px 18px 4px; padding: 12px 18px; font-size: 13px; color: var(--text-muted);
         }
         .spinner {
             width: 14px; height: 14px; border: 2px solid rgba(168,85,247,0.2);
@@ -603,32 +593,25 @@ HTML_TEMPLATE = """
             background: linear-gradient(180deg, rgba(4, 5, 8, 0) 0%, rgba(4, 5, 8, 0.85) 40%, var(--bg-main) 100%);
             z-index: 20;
         }
-
         #input-container { 
             max-width: 900px; margin: 0 auto; background: rgba(13, 16, 24, 0.85); 
             backdrop-filter: blur(24px); border: 1px solid rgba(168, 85, 247, 0.18); border-radius: 18px; 
-            padding: 6px 10px; display: flex; flex-direction: column; gap: 6px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+            padding: 6px 10px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
         }
-
         #file-info-bar { display: none; align-items: center; justify-content: space-between; background: rgba(168, 85, 247, 0.12); padding: 5px 10px; border-radius: 8px; font-size: 11px; color: #d8b4fe; }
         #file-info-bar button { background: none; border: none; color: #f87171; cursor: pointer; font-size: 13px; }
 
         .input-row { display: flex; gap: 6px; align-items: center; width: 100%; }
-
         .mini-btn { 
-            background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); 
-            color: var(--text-muted); padding: 8px; border-radius: 10px; cursor: pointer; 
-            display: flex; align-items: center; justify-content: center; 
+            background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); color: var(--text-muted); 
+            padding: 8px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; 
         }
-
         #prompt-input { flex: 1; background: transparent; border: none; color: #ffffff; font-size: 13.5px; outline: none; min-width: 0; padding: 4px; }
         #prompt-input::placeholder { color: var(--text-muted); }
         
         .btn-action { 
             background: var(--accent-gradient); color: #ffffff; border: none; border-radius: 10px; 
-            padding: 10px 16px; font-size: 12px; font-weight: 600; cursor: pointer; 
-            flex-shrink: 0; display: flex; align-items: center; justify-content: center; min-width: 90px;
+            padding: 10px 16px; font-size: 12px; font-weight: 600; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; min-width: 90px;
         }
         .btn-action.cancel-mode { background: var(--cancel-bg); border: 1px solid var(--cancel-border); color: var(--cancel-color); }
 
@@ -831,7 +814,6 @@ HTML_TEMPLATE = """
         function renderUsersTable() {
             const tbody = document.getElementById('admin-users-list');
             tbody.innerHTML = '';
-
             const filtered = allUsersCache.filter(u => {
                 if (currentFilter === 'vip') return u.status === 'vip';
                 if (currentFilter === 'free') return u.status === 'free';
