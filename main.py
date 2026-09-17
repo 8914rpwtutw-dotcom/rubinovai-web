@@ -160,7 +160,12 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
         try:
             client = get_gemini_client(active_key)
-            response = client.models.generate_content(model=active_model, contents=contents)
+            # Передаем config={}, чтобы избежать предупреждений и ошибок SDK
+            response = client.models.generate_content(
+                model=active_model, 
+                contents=contents,
+                config={}
+            )
             if response and response.text:
                 return response.text
         except APIError as e:
