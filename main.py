@@ -42,16 +42,14 @@ def get_db_connection():
         raise HTTPException(status_code=500, detail="DATABASE_URL не настроена в Environment Variables.")
     return psycopg2.connect(DATABASE_URL)
 
-# Список всех главных администраторов
-DEFAULT_ADMINS = [
-    "8914rpwtutw@gmail.com",
+# Единственный СУПЕР-АДМИНИСТРАТОР (главный владельц)
+SUPER_ADMIN = "8914rpwtutw@gmail.com".lower()
+
+# Начальный список обычных администраторов
+INITIAL_ADMINS = [
     "egrandr123123@gmail.com",
     "gorvov2003@gmail.com"
 ]
-
-# Дополнительно подтягиваем админов из переменной Render (если они там указаны через запятую)
-env_admins = [e.strip().lower() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
-ADMIN_EMAILS = list(set([e.lower() for e in DEFAULT_ADMINS] + env_admins))
 
 def init_db():
     try:
@@ -67,13 +65,20 @@ def init_db():
             )
         """)
         
-        # Автоматическое добавление/восстановление всех администраторов при старте
-        for admin_mail in ADMIN_EMAILS:
+        # Гарантируем статус главного супер-админа
+        cursor.execute("""
+            INSERT INTO users (email, status) 
+            VALUES (%s, 'admin') 
+            ON CONFLICT (email) DO UPDATE SET status = 'admin'
+        """, (SUPER_ADMIN,))
+        
+        # Заносим остальных начальных админов, если их еще нет в базе
+        for adm in INITIAL_ADMINS:
             cursor.execute("""
                 INSERT INTO users (email, status) 
                 VALUES (%s, 'admin') 
-                ON CONFLICT (email) DO UPDATE SET status = 'admin'
-            """, (admin_mail,))
+                ON CONFLICT (email) DO NOTHING
+            """, (adm.lower(),))
         
         conn.commit()
         cursor.close()
@@ -87,13 +92,15 @@ def get_user_status(email: str) -> str:
     if not email:
         return "guest"
     
-    # Проверка на администратора
-    if email.lower() in ADMIN_EMAILS:
+    clean_email = email.lower()
+    
+    # Супер-админ всегда имеет роль admin
+    if clean_email == SUPER_ADMIN:
         return "admin"
     
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT status FROM users WHERE email = %s", (email.lower(),))
+    cursor.execute("SELECT status FROM users WHERE email = %s", (clean_email,))
     row = cursor.fetchone()
     
     if row:
@@ -101,7 +108,7 @@ def get_user_status(email: str) -> str:
         conn.close()
         return row[0]
     
-    cursor.execute("INSERT INTO users (email, status) VALUES (%s, 'free') ON CONFLICT (email) DO NOTHING", (email.lower(),))
+    cursor.execute("INSERT INTO users (email, status) VALUES (%s, 'free') ON CONFLICT (email) DO NOTHING", (clean_email,))
     conn.commit()
     cursor.close()
     conn.close()
@@ -283,18 +290,20 @@ async def admin_update_status(request: Request):
         raise HTTPException(status_code=403, detail="Доступ запрещен")
     
     body = await request.json()
-    target_email = body.get("email")
+    target_email = (body.get("email") or "").lower()
     new_status = body.get("status")
     
+    # Запрещаем выдавать роль 'admin' через админ-панель
     if new_status not in ["free", "vip", "banned"]:
-        raise HTTPException(status_code=400, detail="Неверный статус")
+        raise HTTPException(status_code=400, detail="Назначение роли 'Admin' запрещено в системе.")
     
-    if target_email.lower() in ADMIN_EMAILS:
-        raise HTTPException(status_code=400, detail="Нельзя изменить статус главного администратора")
+    # Защита Главного Супер-Администратора от любых изменений
+    if target_email == SUPER_ADMIN:
+        raise HTTPException(status_code=400, detail="Нельзя изменить статус Главного администратора!")
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET status = %s WHERE email = %s", (new_status, target_email.lower()))
+    cursor.execute("UPDATE users SET status = %s WHERE email = %s", (new_status, target_email))
     conn.commit()
     cursor.close()
     conn.close()
@@ -758,6 +767,8 @@ HTML_TEMPLATE = """
         let currentFilter = 'all';
         let myCurrentStatus = 'guest';
 
+        const SUPER_ADMIN_EMAIL = "8914rpwtutw@gmail.com";
+
         async function checkUserStatusRealtime() {
             try {
                 const res = await fetch('/api/status-check');
@@ -852,11 +863,14 @@ HTML_TEMPLATE = """
             filtered.forEach(u => {
                 const tr = document.createElement('tr');
                 let actionHtml = '';
-                if (u.status === 'banned') {
-                    actionHtml = `<button class="btn-unban" onclick="updateUserStatus('${u.email}', 'free')">Разбанить</button>`;
-                } else if (u.status === 'admin') {
+
+                // Ограничение: Для единственного Главного Админа выводится специальный плашка
+                if (u.email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()) {
                     actionHtml = `<span style="color:#fde047; font-weight:bold;">👑 Главный админ</span>`;
+                } else if (u.status === 'banned') {
+                    actionHtml = `<button class="btn-unban" onclick="updateUserStatus('${u.email}', 'free')">Разбанить</button>`;
                 } else {
+                    // Всех остальных (включая обычных админов) можно переключать или банить
                     actionHtml = `
                         <select onchange="updateUserStatus('${u.email}', this.value)">
                             <option value="free" ${u.status === 'free' ? 'selected' : ''}>Free</option>
@@ -885,11 +899,11 @@ HTML_TEMPLATE = """
                 });
                 if (!res.ok) {
                     const err = await res.json();
-                    alert(err.detail || 'Ошибка');
+                    alert(err.detail || 'Ошибка изменения статуса.');
                 }
                 loadAdminUsers();
             } catch (e) {
-                alert('Ошибка соединения');
+                alert('Ошибка соединения с сервером.');
             }
         }
 
