@@ -285,7 +285,9 @@ def admin_get_users(request: Request):
 
 @app.post("/api/admin/update-status")
 async def admin_update_status(request: Request):
-    user_email = request.session.get("user_email")
+    user_email = (request.session.get("user_email") or "").lower()
+    
+    # 1. Проверяем права вызывающего
     if get_user_status(user_email) != "admin":
         raise HTTPException(status_code=403, detail="Доступ запрещен")
     
@@ -293,13 +295,25 @@ async def admin_update_status(request: Request):
     target_email = (body.get("email") or "").lower()
     new_status = body.get("status")
     
-    # Запрещаем выдавать роль 'admin' через админ-панель
-    if new_status not in ["free", "vip", "banned"]:
-        raise HTTPException(status_code=400, detail="Назначение роли 'Admin' запрещено в системе.")
+    is_super_admin = (user_email == SUPER_ADMIN)
     
-    # Защита Главного Супер-Администратора от любых изменений
+    # 2. Определяем доступные статусы
+    allowed_statuses = ["free", "vip", "banned"]
+    if is_super_admin:
+        allowed_statuses.append("admin")  # Выдавать 'admin' может только Супер-админ
+        
+    if new_status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="Недопустимый статус для назначения.")
+    
+    # 3. Защита Главного Супер-Админа от любых изменений
     if target_email == SUPER_ADMIN:
         raise HTTPException(status_code=400, detail="Нельзя изменить статус Главного администратора!")
+
+    # 4. Обычный админ НЕ может менять статус других админов
+    if not is_super_admin:
+        target_status = get_user_status(target_email)
+        if target_status == "admin":
+            raise HTTPException(status_code=403, detail="Обычный админ не может менять статус других админов.")
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -766,14 +780,16 @@ HTML_TEMPLATE = """
         let allUsersCache = [];
         let currentFilter = 'all';
         let myCurrentStatus = 'guest';
+        let windowCurrentUserEmail = '';
 
-        const SUPER_ADMIN_EMAIL = "8914rpwtutw@gmail.com";
+        const SUPER_ADMIN_EMAIL = "8914rpwtutw@gmail.com".toLowerCase();
 
         async function checkUserStatusRealtime() {
             try {
                 const res = await fetch('/api/status-check');
                 if (res.ok) {
                     const data = await res.json();
+                    windowCurrentUserEmail = (data.email || '').toLowerCase();
                     if (data.status === 'banned') {
                         document.getElementById('banned-overlay').classList.add('active');
                     } else if (myCurrentStatus !== 'guest' && myCurrentStatus !== data.status && myCurrentStatus !== 'unknown') {
@@ -848,6 +864,10 @@ HTML_TEMPLATE = """
         function renderUsersTable() {
             const tbody = document.getElementById('admin-users-list');
             tbody.innerHTML = '';
+            
+            // Проверяем, является ли текщий вошедший пользователь Главным Супер-Админом
+            const isCurrentSuperAdmin = (myCurrentStatus === 'admin' && windowCurrentUserEmail === SUPER_ADMIN_EMAIL);
+
             const filtered = allUsersCache.filter(u => {
                 if (currentFilter === 'vip') return u.status === 'vip';
                 if (currentFilter === 'free') return u.status === 'free';
@@ -863,19 +883,24 @@ HTML_TEMPLATE = """
             filtered.forEach(u => {
                 const tr = document.createElement('tr');
                 let actionHtml = '';
+                const userEmailLower = u.email.toLowerCase();
 
-                // Ограничение: Для единственного Главного Админа выводится специальный плашка
-                if (u.email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()) {
+                // 1. Защита Главного Супер-Администратора
+                if (userEmailLower === SUPER_ADMIN_EMAIL) {
                     actionHtml = `<span style="color:#fde047; font-weight:bold;">👑 Главный админ</span>`;
-                } else if (u.status === 'banned') {
-                    actionHtml = `<button class="btn-unban" onclick="updateUserStatus('${u.email}', 'free')">Разбанить</button>`;
-                } else {
-                    // Всех остальных (включая обычных админов) можно переключать или банить
+                } 
+                // 2. Если элемент в таблице — обычный Админ, а вошедший пользователь НЕ супер-админ
+                else if (u.status === 'admin' && !isCurrentSuperAdmin) {
+                    actionHtml = `<span style="color:#8b5cf6; font-size:12px; font-weight:bold;">Администратор</span>`;
+                }
+                // 3. Выбор статусов для остальных ситуаций
+                else {
                     actionHtml = `
                         <select onchange="updateUserStatus('${u.email}', this.value)">
                             <option value="free" ${u.status === 'free' ? 'selected' : ''}>Free</option>
                             <option value="vip" ${u.status === 'vip' ? 'selected' : ''}>VIP</option>
                             <option value="banned" ${u.status === 'banned' ? 'selected' : ''}>Ban</option>
+                            ${isCurrentSuperAdmin ? `<option value="admin" ${u.status === 'admin' ? 'selected' : ''}>Admin</option>` : ''}
                         </select>
                     `;
                 }
