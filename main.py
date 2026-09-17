@@ -34,6 +34,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             email TEXT PRIMARY KEY,
             status TEXT DEFAULT 'free', -- 'free', 'vip', 'banned'
+            requests_count INTEGER DEFAULT 0,
+            last_reset_date TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -42,7 +44,6 @@ def init_db():
 
 init_db()
 
-# Твой административный email
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "8914rpwtutw@gmail.com")
 
 def get_user_status(email: str) -> str:
@@ -55,13 +56,11 @@ def get_user_status(email: str) -> str:
     cursor = conn.cursor()
     cursor.execute("SELECT status FROM users WHERE email = ?", (email.lower(),))
     row = cursor.fetchone()
-    conn.close()
     
     if row:
+        conn.close()
         return row[0] # 'free', 'vip', 'banned'
     
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (email, status) VALUES (?, 'free')", (email.lower(),))
     conn.commit()
     conn.close()
@@ -250,11 +249,11 @@ def admin_get_users(request: Request):
     
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT email, status, created_at FROM users ORDER BY created_at DESC")
+    cursor.execute("SELECT email, status, requests_count, created_at FROM users ORDER BY created_at DESC")
     rows = cursor.fetchall()
     conn.close()
     
-    users_list = [{"email": r[0], "status": r[1], "created_at": r[2]} for r in rows]
+    users_list = [{"email": r[0], "status": r[1], "requests_count": r[2], "created_at": r[3]} for r in rows]
     return {"users": users_list}
 
 @app.post("/api/admin/update-status")
@@ -293,14 +292,45 @@ async def chat_endpoint(
     if status == "banned":
         raise HTTPException(status_code=403, detail="Ваш аккаунт заблокирован администратором.")
 
-    guest_count = int(request.cookies.get("guest_requests", "0"))
-
+    # Проверка лимитов и файлов
     if not user_email:
+        guest_count = int(request.cookies.get("guest_requests", "0"))
         if guest_count >= 10:
             raise HTTPException(
                 status_code=403, 
-                detail="Исчерпан лимит (10 запросов) для гостя. Войдите через Google аккаунт, чтобы снять ограничения."
+                detail="Исчерпан лимит (10 запросов) для гостя. Войдите через Google аккаунт (до 50 запросов в сутки бесплатно)."
             )
+        if file:
+            raise HTTPException(status_code=403, detail="Гости не могут отправлять файлы и фото. Войдите в аккаунт.")
+    elif status == "free":
+        # Проверка суточного лимита 50 запросов для Free
+        today = time.strftime("%Y-%m-%d")
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT requests_count, last_reset_date FROM users WHERE email = ?", (user_email.lower(),))
+        row = cursor.fetchone()
+        
+        req_count = 0
+        last_date = ""
+        if row:
+            req_count, last_date = row[0], row[1]
+        
+        if last_date != today:
+            req_count = 0
+            cursor.execute("UPDATE users SET requests_count = 0, last_reset_date = ? WHERE email = ?", (today, user_email.lower()))
+            conn.commit()
+            
+        if req_count >= 50:
+            conn.close()
+            raise HTTPException(status_code=403, detail="Исчерпан дневной лимит (50 запросов) для Free аккаунта. Перейдите на VIP для безлимита.")
+        
+        if file:
+            conn.close()
+            raise HTTPException(status_code=403, detail="Отправка файлов и фото доступна только VIP-пользователям.")
+            
+        cursor.execute("UPDATE users SET requests_count = ? WHERE email = ?", (req_count + 1, user_email.lower()))
+        conn.commit()
+        conn.close()
 
     if not prompt.strip() and not file:
         raise HTTPException(status_code=400, detail="Запрос или файл обязателен")
@@ -318,6 +348,7 @@ async def chat_endpoint(
     json_resp = JSONResponse(content=response_data)
 
     if not user_email:
+        guest_count = int(request.cookies.get("guest_requests", "0"))
         json_resp.set_cookie(key="guest_requests", value=str(guest_count + 1), httponly=False)
 
     return json_resp
@@ -338,7 +369,7 @@ HTML_TEMPLATE = """
             --bg-main: #040508;
             --bg-sidebar: rgba(10, 12, 18, 0.65);
             --card-bg: rgba(18, 21, 31, 0.5);
-            --border-color: rgba(255, 255, 255, 0.05);
+            --border-color: rgba(255, 255, 255, 0.08);
             --border-hover: rgba(168, 85, 247, 0.25);
             --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
             --accent-glow: rgba(168, 85, 247, 0.15);
@@ -349,7 +380,7 @@ HTML_TEMPLATE = """
             --text-muted: #94a3b8;
             --user-msg-bg: linear-gradient(135deg, rgba(99, 102, 241, 0.16) 0%, rgba(168, 85, 247, 0.14) 100%);
             --bot-msg-bg: rgba(15, 18, 26, 0.65);
-            --scrollbar-thumb: rgba(255, 255, 255, 0.08);
+            --scrollbar-thumb: rgba(255, 255, 255, 0.12);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
@@ -450,36 +481,52 @@ HTML_TEMPLATE = """
 
         #admin-modal {
             display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
-            background: rgba(4, 5, 8, 0.8); backdrop-filter: blur(8px); z-index: 100;
+            background: rgba(4, 5, 8, 0.85); backdrop-filter: blur(8px); z-index: 100;
             align-items: center; justify-content: center; padding: 20px;
         }
         #admin-modal.active { display: flex; }
         .admin-box {
             background: #0d1018; border: 1px solid rgba(168, 85, 247, 0.3);
-            border-radius: 20px; width: 100%; max-width: 650px; max-height: 80dvh;
+            border-radius: 20px; width: 100%; max-width: 750px; max-height: 85dvh;
             display: flex; flex-direction: column; overflow: hidden;
             box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 30px rgba(168,85,247,0.15);
         }
         .admin-header {
             padding: 16px 20px; border-bottom: 1px solid var(--border-color);
             display: flex; justify-content: space-between; align-items: center;
-            background: rgba(18, 21, 31, 0.6);
+            background: rgba(18, 21, 31, 0.8);
         }
         .admin-header h3 { font-size: 15px; color: #fff; font-weight: 700; }
         .admin-close { background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; }
         .admin-close:hover { color: #f87171; }
+        
+        .admin-filters {
+            padding: 12px 20px; display: flex; gap: 8px; background: rgba(13, 16, 24, 0.9);
+            border-bottom: 1px solid var(--border-color); flex-wrap: wrap;
+        }
+        .filter-btn {
+            background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color);
+            color: var(--text-muted); padding: 6px 12px; border-radius: 8px; font-size: 11px;
+            font-weight: 600; cursor: pointer; transition: all 0.2s;
+        }
+        .filter-btn.active { background: rgba(168, 85, 247, 0.2); border-color: rgba(168, 85, 247, 0.4); color: #fff; }
+        .filter-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+
         .admin-content { padding: 16px 20px; overflow-y: auto; flex: 1; }
         .admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-        .admin-table th, .admin-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-color); }
-        .admin-table th { color: var(--text-muted); font-weight: 600; }
-        .badge { padding: 3px 8px; border-radius: 6px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; }
-        .badge-free { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
-        .badge-vip { background: rgba(168, 85, 247, 0.2); color: #d8b4fe; border: 1px solid rgba(168,85,247,0.3); }
-        .badge-banned { background: rgba(248, 113, 113, 0.2); color: #f87171; border: 1px solid rgba(248,113,113,0.3); }
+        .admin-table th, .admin-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-color); color: #f1f5f9; }
+        .admin-table th { color: var(--text-muted); font-weight: 600; background: rgba(255,255,255,0.02); }
+        
+        .badge { padding: 4px 10px; border-radius: 6px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; display: inline-block; }
+        .badge-free { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.2); }
+        .badge-vip { background: rgba(168, 85, 247, 0.25); color: #e9d5ff; border: 1px solid rgba(168,85,247,0.4); }
+        .badge-banned { background: rgba(248, 113, 113, 0.25); color: #fca5a5; border: 1px solid rgba(248,113,113,0.4); }
+        
         .admin-actions-cell select {
-            background: rgba(255,255,255,0.05); border: 1px solid var(--border-color);
-            color: #fff; padding: 4px 8px; border-radius: 8px; font-size: 11px; outline: none; cursor: pointer;
+            background: #1a1f2c; border: 1px solid rgba(168, 85, 247, 0.3);
+            color: #ffffff; padding: 6px 10px; border-radius: 8px; font-size: 11.5px; outline: none; cursor: pointer; font-weight: 600;
         }
+        .admin-actions-cell select option { background: #0d1018; color: #fff; }
 
         #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; height: 100dvh; overflow: hidden; z-index: 1; }
         
@@ -635,17 +682,24 @@ HTML_TEMPLATE = """
                 <h3>👑 Панель администратора</h3>
                 <button class="admin-close" onclick="toggleAdminModal(false)">×</button>
             </div>
+            <div class="admin-filters">
+                <button class="filter-btn active" onclick="filterAdminUsers('all', this)">Все пользователи</button>
+                <button class="filter-btn" onclick="filterAdminUsers('vip', this)">⚡ VIP</button>
+                <button class="filter-btn" onclick="filterAdminUsers('free', this)">👤 Free</button>
+                <button class="filter-btn" onclick="filterAdminUsers('banned', this)">🚫 Забаненные</button>
+            </div>
             <div class="admin-content">
                 <table class="admin-table">
                     <thead>
                         <tr>
                             <th>Email</th>
                             <th>Статус</th>
+                            <th>Запросов сегодня</th>
                             <th>Действие</th>
                         </tr>
                     </thead>
                     <tbody id="admin-users-list">
-                        <tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Загрузка...</td></tr>
+                        <tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Загрузка...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -737,6 +791,8 @@ HTML_TEMPLATE = """
         let selectedFile = null;
         let activeController = null;
         let isGenerating = false;
+        let allUsersCache = [];
+        let currentFilter = 'all';
 
         if (chats.length === 0) {
             const initialChat = { id: Date.now().toString(), name: 'Новый чат 1', messages: [] };
@@ -783,31 +839,57 @@ HTML_TEMPLATE = """
 
         async function loadAdminUsers() {
             const tbody = document.getElementById('admin-users-list');
-            tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Загрузка...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Загрузка...</td></tr>';
             try {
                 const res = await fetch('/api/admin/users');
                 if (!res.ok) throw new Error('Ошибка доступа');
                 const data = await res.json();
-                
-                tbody.innerHTML = '';
-                data.users.forEach(u => {
-                    const tr = document.createElement('tr');
-                    tr.innerHTML = `
-                        <td style="word-break:break-all;">${escapeHtml(u.email)}</td>
-                        <td><span class="badge badge-${u.status}">${u.status}</span></td>
-                        <td class="admin-actions-cell">
-                            <select onchange="updateUserStatus('${u.email}', this.value)">
-                                <option value="free" ${u.status === 'free' ? 'selected' : ''}>Free</option>
-                                <option value="vip" ${u.status === 'vip' ? 'selected' : ''}>VIP</option>
-                                <option value="banned" ${u.status === 'banned' ? 'selected' : ''}>Ban</option>
-                            </select>
-                        </td>
-                    `;
-                    tbody.appendChild(tr);
-                });
+                allUsersCache = data.users;
+                renderUsersTable();
             } catch (err) {
-                tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:#f87171;">Не удалось загрузить список пользователей.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#f87171;">Не удалось загрузить список пользователей.</td></tr>';
             }
+        }
+
+        function filterAdminUsers(filter, btn) {
+            currentFilter = filter;
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            renderUsersTable();
+        }
+
+        function renderUsersTable() {
+            const tbody = document.getElementById('admin-users-list');
+            tbody.innerHTML = '';
+
+            const filtered = allUsersCache.filter(u => {
+                if (currentFilter === 'vip') return u.status === 'vip';
+                if (currentFilter === 'free') return u.status === 'free';
+                if (currentFilter === 'banned') return u.status === 'banned';
+                return true;
+            });
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Пользователей в этой категории нет.</td></tr>';
+                return;
+            }
+
+            filtered.forEach(u => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td style="word-break:break-all;">${escapeHtml(u.email)}</td>
+                    <td><span class="badge badge-${u.status}">${u.status}</span></td>
+                    <td><b>${u.requests_count || 0}</b> / 50</td>
+                    <td class="admin-actions-cell">
+                        <select onchange="updateUserStatus('${u.email}', this.value)">
+                            <option value="free" ${u.status === 'free' ? 'selected' : ''}>Free</option>
+                            <option value="vip" ${u.status === 'vip' ? 'selected' : ''}>VIP</option>
+                            <option value="banned" ${u.status === 'banned' ? 'selected' : ''}>Ban</option>
+                        </select>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
         }
 
         async function updateUserStatus(email, status) {
@@ -1094,21 +1176,21 @@ HTML_TEMPLATE = """
 async def get_chat_ui(request: Request):
     user_email = request.cookies.get("user_email")
     status = get_user_status(user_email)
-    guest_count = int(request.cookies.get("guest_requests", "0"))
     
     if user_email:
         admin_btn_html = f"""<button class="btn-admin-panel" onclick="toggleAdminModal(true)">👑 Админ-панель</button>""" if status == "admin" else ""
         auth_block = f"""
             {admin_btn_html}
-            <div style="font-size: 11px; color: #a855f7; word-break: break-all; margin-bottom: 4px;">👤 {user_email}</div>
+            <div style="font-size: 11px; color: #a855f7; word-break: break-all; margin-bottom: 4px;">👤 {user_email} ({status.upper()})</div>
             <a href="/auth/logout" style="color: #f87171; font-size: 11px; text-decoration: none; margin-bottom: 6px; display: inline-block;">Выйти из аккаунта</a>
         """
     else:
+        guest_count = int(request.cookies.get("guest_requests", "0"))
         left_limit = max(0, 10 - guest_count)
         auth_block = f"""
-            <div style="font-size: 11px; color: #94a3b8; margin-bottom: 6px;">Бесплатно запросов: <b>{left_limit}/10</b></div>
+            <div style="font-size: 11px; color: #94a3b8; margin-bottom: 6px;">Гостевых запросов: <b>{left_limit}/10</b></div>
             <a href="/auth/google" class="btn-google-login">
-                <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.3 8.9 5 12 5z"/><path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"/><path fill="#FBBC05" d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.4 0 10.6 0 13s.6 4.6 1.6 6.6l3.7-2.9z"/><path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.3-6.7-5.3L1.6 15.6C3.5 19.4 7.4 23 12 23z"/></svg>
+                <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.3 8.9 5 12 5z"/><path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"/><path fill="#FBBC05" d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.4 0 10.6 0 13s.6 4.6 1.6 6.6l3.7-2.9z"/><path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.3-6.7-5.3L1.6 15.6C3.5 19.4 7.4 23 12 23 z"/></svg>
                 Войти через Google
             </a>
         """
