@@ -9,3 +9,4 @@ passlib[bcrypt]
 pyjwt
 httpx
 requests
+itsdangerous
