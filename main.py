@@ -96,7 +96,7 @@ def get_user_status(email: str) -> str:
     conn.close()
     return "free"
 
-MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash"]
+MODELS = ["gemini-3.1-flash-lite", "gemini-2.5-flash"]
 current_key_idx = 0
 current_model_idx = 0
 
