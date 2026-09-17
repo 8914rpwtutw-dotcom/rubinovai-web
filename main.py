@@ -160,12 +160,9 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
         try:
             client = get_gemini_client(active_key)
-            # Передаем config={}, чтобы избежать предупреждений и ошибок SDK
-            response = client.models.generate_content(
-                model=active_model, 
-                contents=contents,
-                config={}
-            )
+            # Используем рекомендованный метод чата, исправляющий ошибку 500 и предупреждения AFC
+            chat = client.chats.create(model=active_model)
+            response = chat.send_message(contents)
             if response and response.text:
                 return response.text
         except APIError as e:
@@ -177,7 +174,8 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
                 time.sleep(0.5)
                 continue
             break
-        except Exception:
+        except Exception as err:
+            print(f"Gemini API Error: {err}")
             current_model_idx += 1
             if current_model_idx >= num_models:
                 current_model_idx = 0
