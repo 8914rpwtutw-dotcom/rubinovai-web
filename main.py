@@ -814,14 +814,14 @@ HTML_TEMPLATE = """
         <div class="admin-box" style="max-width:550px;" onclick="event.stopPropagation()">
             <div class="admin-header">
                 <h3>💬 Служба поддержки Rubinov AI</h3>
-                <button class="admin-close" onclick="toggleUserSupportModal(false)">×</button>
+                <button type="button" class="admin-close" onclick="toggleUserSupportModal(false)">×</button>
             </div>
             <div class="admin-content">
-                <div style="margin-bottom: 14px;">
+                <form onsubmit="submitUserTicket(event)" style="margin-bottom: 14px;">
                     <label style="font-size: 11.5px; color: var(--text-muted); display: block; margin-bottom: 6px;">Опишите вашу проблему или вопрос:</label>
                     <textarea id="user-ticket-input" style="width: 100%; background: rgba(0,0,0,0.4); border: 1px solid var(--border-color); color: #fff; padding: 10px; border-radius: 10px; font-size: 12px; outline: none; resize: vertical; min-height: 70px;" placeholder="Здравствуйте, у меня возник вопрос по..."></textarea>
-                    <button onclick="submitUserTicket()" class="btn-action" style="margin-top: 8px; width: 100%;">Отправить вопрос</button>
-                </div>
+                    <button type="submit" class="btn-action" style="margin-top: 8px; width: 100%;">Создать тикет</button>
+                </form>
                 <hr style="border: none; border-top: 1px solid var(--border-color); margin: 14px 0;">
                 <h4 style="font-size: 12px; color: #fff; margin-bottom: 10px;">Ваши обращения:</h4>
                 <div id="user-tickets-list">Загрузка...</div>
@@ -834,22 +834,22 @@ HTML_TEMPLATE = """
         <div class="admin-box" onclick="event.stopPropagation()">
             <div class="admin-header">
                 <h3>👑 Панель администратора</h3>
-                <button class="admin-close" onclick="toggleAdminModal(false)">×</button>
+                <button type="button" class="admin-close" onclick="toggleAdminModal(false)">×</button>
             </div>
             
             <div class="admin-nav-tabs">
-                <button class="tab-btn active" id="tab-users-btn" onclick="switchAdminTab('users')">👥 Пользователи</button>
-                <button class="tab-btn" id="tab-tickets-btn" onclick="switchAdminTab('tickets')">💬 ПОДДЕРЖКА (Тикеты)</button>
+                <button type="button" class="tab-btn active" id="tab-users-btn" onclick="switchAdminTab('users')">👥 Пользователи</button>
+                <button type="button" class="tab-btn" id="tab-tickets-btn" onclick="switchAdminTab('tickets')">💬 ПОДДЕРЖКА (Тикеты)</button>
             </div>
 
             <!-- Вкладка ПОЛЬЗОВАТЕЛИ -->
             <div id="admin-tab-users" style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
                 <div class="admin-filters">
-                    <button class="filter-btn active" onclick="filterAdminUsers('all', this)">Все</button>
-                    <button class="filter-btn" onclick="filterAdminUsers('admin', this)">👑 Админы</button>
-                    <button class="filter-btn" onclick="filterAdminUsers('vip', this)">⚡ VIP</button>
-                    <button class="filter-btn" onclick="filterAdminUsers('free', this)">👤 Free</button>
-                    <button class="filter-btn" onclick="filterAdminUsers('banned', this)">🚫 Забаненные</button>
+                    <button type="button" class="filter-btn active" onclick="filterAdminUsers('all', this)">Все</button>
+                    <button type="button" class="filter-btn" onclick="filterAdminUsers('admin', this)">👑 Админы</button>
+                    <button type="button" class="filter-btn" onclick="filterAdminUsers('vip', this)">⚡ VIP</button>
+                    <button type="button" class="filter-btn" onclick="filterAdminUsers('free', this)">👤 Free</button>
+                    <button type="button" class="filter-btn" onclick="filterAdminUsers('banned', this)">🚫 Забаненные</button>
                 </div>
                 <div class="admin-content">
                     <table class="admin-table">
@@ -871,8 +871,8 @@ HTML_TEMPLATE = """
             <!-- Вкладка ПОДДЕРЖКА (ТИКЕТЫ) -->
             <div id="admin-tab-tickets" style="display: none; flex-direction: column; flex: 1; overflow: hidden;">
                 <div class="admin-filters">
-                    <button class="filter-btn active" onclick="filterAdminTickets('open', this)">🔵 Актуальные тикеты</button>
-                    <button class="filter-btn" onclick="filterAdminTickets('all', this)">📋 Все обращения</button>
+                    <button type="button" class="filter-btn active" onclick="filterAdminTickets('open', this)">🔵 Актуальные тикеты</button>
+                    <button type="button" class="filter-btn" onclick="filterAdminTickets('all', this)">📋 Все обращения</button>
                 </div>
                 <div class="admin-content" id="admin-tickets-list">
                     Загрузка тикетов...
@@ -894,12 +894,12 @@ HTML_TEMPLATE = """
             <div><h2>Rubinov AI</h2><span>Assistant</span></div>
         </div>
 
-        <button class="btn-new-chat" onclick="createNewChat()">
+        <button type="button" class="btn-new-chat" onclick="createNewChat()">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
             Новый диалог
         </button>
 
-        <button class="btn-support-chat" onclick="toggleUserSupportModal(true)">
+        <button type="button" class="btn-support-chat" onclick="toggleUserSupportModal(true)">
             💬 Написать в поддержку
         </button>
 
@@ -915,7 +915,7 @@ HTML_TEMPLATE = """
     <div id="main">
         <div id="chat-header">
             <div class="header-left">
-                <button class="menu-toggle" onclick="toggleSidebar()" title="Меню">
+                <button type="button" class="menu-toggle" onclick="toggleSidebar()" title="Меню">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
                 </button>
                 <h3 id="current-chat-title">Чаты</h3>
@@ -928,18 +928,18 @@ HTML_TEMPLATE = """
             <div id="input-container">
                 <div id="file-info-bar">
                     <span id="file-name-text">Файл прикреплен</span>
-                    <button onclick="removeSelectedFile()">✕</button>
+                    <button type="button" onclick="removeSelectedFile()">✕</button>
                 </div>
                 <div class="input-row">
                     <input type="file" id="file-input" accept="image/*" capture="environment" style="display: none;" onchange="handleFileSelect(event)" />
-                    <button class="mini-btn" onclick="checkFilePermissionAndOpen()" title="Прикрепить фото">
+                    <button type="button" class="mini-btn" onclick="checkFilePermissionAndOpen()" title="Прикрепить фото">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                     </button>
-                    <button class="mini-btn" onclick="triggerImageGenerationPrompt()" title="Сгенерировать картинку">
+                    <button type="button" class="mini-btn" onclick="triggerImageGenerationPrompt()" title="Сгенерировать картинку">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                     </button>
                     <input type="text" id="prompt-input" placeholder="Введите сообщение..." onkeydown="handleKeyPress(event)" />
-                    <button class="btn-action" id="action-btn" onclick="handleActionButton()">Отправить</button>
+                    <button type="button" class="btn-action" id="action-btn" onclick="handleActionButton()">Отправить</button>
                 </div>
             </div>
         </div>
@@ -977,6 +977,21 @@ HTML_TEMPLATE = """
         }
         setInterval(checkUserStatusRealtime, 8000);
         checkUserStatusRealtime();
+
+        // Автообновление чата поддержки и тикетов в реальном времени каждые 5 секунд
+        setInterval(() => {
+            const supportModal = document.getElementById('user-support-modal');
+            if (supportModal && supportModal.classList.contains('active')) {
+                loadMyTickets();
+            }
+            const adminModal = document.getElementById('admin-modal');
+            if (adminModal && adminModal.classList.contains('active')) {
+                const ticketsTab = document.getElementById('admin-tab-tickets');
+                if (ticketsTab && ticketsTab.style.display !== 'none') {
+                    loadAdminTickets();
+                }
+            }
+        }, 5000);
 
         if (chats.length === 0) {
             const initialChat = { id: Date.now().toString(), name: 'Новый чат 1', messages: [] };
@@ -1123,7 +1138,6 @@ HTML_TEMPLATE = """
         /* АДМИН - ТИКЕТЫ ПОДДЕРЖКИ */
         async function loadAdminTickets() {
             const container = document.getElementById('admin-tickets-list');
-            container.innerHTML = 'Загрузка тикетов...';
             try {
                 const res = await fetch('/api/admin/tickets');
                 if (!res.ok) throw new Error();
@@ -1131,7 +1145,9 @@ HTML_TEMPLATE = """
                 allTicketsCache = data.tickets;
                 renderAdminTickets();
             } catch (err) {
-                container.innerHTML = '<span style="color:#f87171;">Ошибка загрузки тикетов.</span>';
+                if (!allTicketsCache.length) {
+                    container.innerHTML = '<span style="color:#f87171;">Ошибка загрузки тикетов.</span>';
+                }
             }
         }
 
@@ -1144,6 +1160,12 @@ HTML_TEMPLATE = """
 
         function renderAdminTickets() {
             const container = document.getElementById('admin-tickets-list');
+            
+            const activeTextareas = {};
+            container.querySelectorAll('textarea').forEach(ta => {
+                activeTextareas[ta.id] = ta.value;
+            });
+
             container.innerHTML = '';
 
             const filtered = allTicketsCache.filter(t => {
@@ -1159,6 +1181,10 @@ HTML_TEMPLATE = """
             filtered.forEach(t => {
                 const card = document.createElement('div');
                 card.className = 'ticket-card';
+                const currentDraft = activeTextareas[`reply-input-${t.id}`] !== undefined 
+                    ? activeTextareas[`reply-input-${t.id}`] 
+                    : (t.admin_reply || '');
+
                 card.innerHTML = `
                     <div class="ticket-header">
                         <span><b>Тикет #${t.id}</b> | ${escapeHtml(t.user_email)}</span>
@@ -1168,10 +1194,10 @@ HTML_TEMPLATE = """
                     ${t.admin_reply ? `<div class="ticket-msg" style="border-left:2px solid #a855f7;"><b>Ваш ответ:</b> ${escapeHtml(t.admin_reply)}</div>` : ''}
                     ${t.status !== 'closed' ? `
                         <div class="ticket-reply-box">
-                            <textarea id="reply-input-${t.id}" placeholder="Напишите ответ пользователю...">${escapeHtml(t.admin_reply || '')}</textarea>
+                            <textarea id="reply-input-${t.id}" placeholder="Напишите ответ пользователю...">${escapeHtml(currentDraft)}</textarea>
                             <div style="display:flex; gap:8px;">
-                                <button class="btn-ticket-action btn-reply" onclick="sendTicketReply(${t.id}, false)">Отправить ответ</button>
-                                <button class="btn-ticket-action btn-close-ticket" onclick="sendTicketReply(${t.id}, true)">Завершить тикет</button>
+                                <button type="button" class="btn-ticket-action btn-reply" onclick="sendTicketReply(${t.id}, false)">Отправить ответ</button>
+                                <button type="button" class="btn-ticket-action btn-close-ticket" onclick="sendTicketReply(${t.id}, true)">Завершить тикет</button>
                             </div>
                         </div>
                     ` : ''}
@@ -1217,7 +1243,6 @@ HTML_TEMPLATE = """
 
         async function loadMyTickets() {
             const container = document.getElementById('user-tickets-list');
-            container.innerHTML = 'Загрузка...';
             try {
                 const res = await fetch('/api/tickets/my');
                 const data = await res.json();
@@ -1240,11 +1265,15 @@ HTML_TEMPLATE = """
                     container.appendChild(item);
                 });
             } catch(e) {
-                container.innerHTML = '<span style="color:#f87171; font-size:12px;">Ошибка загрузки.</span>';
+                if (!container.children.length) {
+                    container.innerHTML = '<span style="color:#f87171; font-size:12px;">Ошибка загрузки.</span>';
+                }
             }
         }
 
-        async function submitUserTicket() {
+        async function submitUserTicket(e) {
+            if (e) e.preventDefault();
+            
             const input = document.getElementById('user-ticket-input');
             const message = input.value.trim();
             if (!message) return alert('Введите текст сообщения.');
@@ -1500,7 +1529,7 @@ async def get_chat_ui(request: Request):
     status = get_user_status(user_email)
     
     if user_email:
-        admin_btn_html = f"""<button class="btn-admin-panel" onclick="toggleAdminModal(true)">👑 Админ-панель</button>""" if status == "admin" else ""
+        admin_btn_html = f"""<button type="button" class="btn-admin-panel" onclick="toggleAdminModal(true)">👑 Админ-панель</button>""" if status == "admin" else ""
         badge_html = f"""<span class="status-badge badge-{status if status != 'admin' else 'admin'}">{status.upper()}</span>"""
 
         auth_block = f"""
