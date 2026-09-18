@@ -699,6 +699,14 @@ HTML_TEMPLATE = """
         }
         .btn-admin-panel:hover { background: rgba(168, 85, 247, 0.25); color: #fff; }
 
+        .btn-ticket-action {
+            background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); color: #fff;
+            padding: 6px 12px; border-radius: 8px; font-size: 11px; cursor: pointer; transition: all 0.2s;
+        }
+        .btn-ticket-action:hover { background: rgba(255, 255, 255, 0.1); }
+        .btn-close-ticket { background: rgba(248, 113, 113, 0.15); border-color: rgba(248, 113, 113, 0.3); color: #f87171; }
+        .btn-close-ticket:hover { background: rgba(248, 113, 113, 0.3); }
+
         .status-badge { padding: 2px 6px; border-radius: 6px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; display: inline-block; margin-left: 4px; }
         .badge-vip { background: rgba(168, 85, 247, 0.25); color: #e9d5ff; border: 1px solid rgba(168,85,247,0.4); }
         .badge-free { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.2); }
@@ -1589,34 +1597,25 @@ HTML_TEMPLATE = """
             messages.forEach(msg => {
                 const row = document.createElement('div');
                 row.className = `msg-row ${msg.role === 'user' ? 'user-row' : 'bot-row'}`;
-                
+
                 if (msg.role === 'user') {
-                    const box = document.createElement('div');
-                    box.className = 'msg-user';
-                    let content = '';
-                    if (msg.file) content += `<div class="file-preview-tag">📷 ${escapeHtml(msg.file)}</div><br>`;
-                    content += escapeHtml(msg.text);
-                    box.innerHTML = content;
-                    row.appendChild(box);
+                    let fileBadge = msg.fileName ? `<div class="file-preview-tag">📎 ${escapeHtml(msg.fileName)}</div><br/>` : '';
+                    row.innerHTML = `<div class="msg-user">${fileBadge}${escapeHtml(msg.content)}</div>`;
                 } else {
-                    const box = document.createElement('div');
-                    box.className = 'msg-bot';
-                    if (msg.text.includes('<img')) box.innerHTML = msg.text;
-                    else box.innerHTML = marked.parse(msg.text);
-                    row.appendChild(box);
+                    row.innerHTML = `<div class="msg-bot">${marked.parse(msg.content)}</div>`;
                 }
                 chatContainer.appendChild(row);
             });
+
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
-        function handleFileSelect(event) {
-            const file = event.target.files[0];
-            if (file) {
-                selectedFile = file;
-                document.getElementById('file-name-text').textContent = `📷 ${file.name}`;
-                document.getElementById('file-info-bar').style.display = 'flex';
-            }
+        function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            selectedFile = file;
+            document.getElementById('file-name-text').textContent = `📎 ${file.name}`;
+            document.getElementById('file-info-bar').style.display = 'flex';
         }
 
         function removeSelectedFile() {
@@ -1626,135 +1625,175 @@ HTML_TEMPLATE = """
         }
 
         function handleKeyPress(e) {
-            if (e.key === 'Enter') handleActionButton();
-        }
-
-        function setGeneratingState(generating) {
-            isGenerating = generating;
-            const actionBtn = document.getElementById('action-btn');
-            const promptInput = document.getElementById('prompt-input');
-
-            if (generating) {
-                actionBtn.textContent = 'Отменить';
-                actionBtn.className = 'btn-action cancel-mode';
-                promptInput.disabled = true;
-            } else {
-                actionBtn.textContent = 'Отправить';
-                actionBtn.className = 'btn-action';
-                promptInput.disabled = false;
-                promptInput.focus();
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleActionButton();
             }
         }
 
         function handleActionButton() {
-            if (isGenerating) cancelCurrentRequest();
-            else sendMessage();
+            if (isGenerating) {
+                cancelRequest();
+            } else {
+                sendMessage();
+            }
         }
 
-        function cancelCurrentRequest() {
+        function setGeneratingState(generating) {
+            isGenerating = generating;
+            const btn = document.getElementById('action-btn');
+            const input = document.getElementById('prompt-input');
+
+            if (generating) {
+                btn.textContent = 'Отмена';
+                btn.classList.add('cancel-mode');
+                input.disabled = true;
+            } else {
+                btn.textContent = 'Отправить';
+                btn.classList.remove('cancel-mode');
+                input.disabled = false;
+                input.focus();
+            }
+        }
+
+        function cancelRequest() {
             if (activeController) {
                 activeController.abort();
                 activeController = null;
             }
-            document.getElementById('temp-loader-row')?.remove();
             setGeneratingState(false);
+
+            const activeChat = chats.find(c => c.id === currentChatId);
+            if (activeChat) {
+                const loader = document.getElementById('active-loader');
+                if (loader) loader.remove();
+                
+                activeChat.messages.push({
+                    role: 'bot',
+                    content: '<i>Сообщение отменено пользователем.</i>'
+                });
+                saveState();
+            }
         }
 
         async function sendMessage() {
             const input = document.getElementById('prompt-input');
-            const text = input.value.trim();
-            if (!text && !selectedFile) return;
+            const promptText = input.value.trim();
+
+            if (!promptText && !selectedFile) return;
 
             const activeChat = chats.find(c => c.id === currentChatId);
             if (!activeChat) return;
 
-            activeChat.messages.push({ role: 'user', text: text, file: selectedFile ? selectedFile.name : null });
-            if (activeChat.messages.length === 1 && text) {
-                activeChat.name = text.slice(0, 18) + (text.length > 18 ? '...' : '');
+            if (activeChat.messages.length === 0 && promptText) {
+                activeChat.name = promptText.slice(0, 20) + (promptText.length > 20 ? '...' : '');
             }
-            renderMessages(activeChat.messages);
 
-            const formData = new FormData();
-            formData.append('prompt', text);
-            if (selectedFile) formData.append('file', selectedFile);
+            const userMsg = {
+                role: 'user',
+                content: promptText,
+                fileName: selectedFile ? selectedFile.name : null
+            };
+            activeChat.messages.push(userMsg);
 
             input.value = '';
+            const attachedFile = selectedFile;
             removeSelectedFile();
+            saveState();
+
             setGeneratingState(true);
 
             const chatContainer = document.getElementById('chat-container');
-            const botRow = document.createElement('div');
-            botRow.className = 'msg-row bot-row';
-            botRow.id = 'temp-loader-row';
-            botRow.innerHTML = `<div class="loader-box"><div class="spinner"></div><span>Думаю...</span></div>`;
-            chatContainer.appendChild(botRow);
+            const loaderRow = document.createElement('div');
+            loaderRow.className = 'msg-row bot-row';
+            loaderRow.id = 'active-loader';
+            loaderRow.innerHTML = `
+                <div class="loader-box">
+                    <div class="spinner"></div>
+                    <span>Rubinov AI думает...</span>
+                </div>
+            `;
+            chatContainer.appendChild(loaderRow);
             chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            const formData = new FormData();
+            formData.append('prompt', promptText);
+            if (attachedFile) {
+                formData.append('file', attachedFile);
+            }
 
             activeController = new AbortController();
 
             try {
-                const res = await fetch('/api/chat', { method: 'POST', body: formData, signal: activeController.signal });
-                const data = await res.json();
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    body: formData,
+                    signal: activeController.signal
+                });
 
-                document.getElementById('temp-loader-row')?.remove();
-                setGeneratingState(false);
-                activeController = null;
-
-                if (res.ok) {
-                    activeChat.messages.push({ role: 'bot', text: data.response });
-                } else {
-                    activeChat.messages.push({ role: 'bot', text: 'Ошибка: ' + (data.detail || 'Не удалось получить ответ.') });
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.detail || 'Ошибка при получении ответа');
                 }
-            } catch (e) {
-                if (e.name === 'AbortError') return;
-                document.getElementById('temp-loader-row')?.remove();
-                setGeneratingState(false);
+
+                const data = await response.json();
+
+                activeChat.messages.push({
+                    role: 'bot',
+                    content: data.response
+                });
+            } catch (err) {
+                if (err.name === 'AbortError') return;
+
+                activeChat.messages.push({
+                    role: 'bot',
+                    content: `⚠️ Ошибка: ${err.message}`
+                });
+            } finally {
                 activeController = null;
-                activeChat.messages.push({ role: 'bot', text: 'Ошибка подключения к серверу.' });
+                setGeneratingState(false);
+                const loader = document.getElementById('active-loader');
+                if (loader) loader.remove();
+                saveState();
             }
-            saveState();
         }
 
         function escapeHtml(text) {
-            return (text || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            if (!text) return '';
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
         }
-
-        renderChats();
     </script>
 </body>
 </html>
 """
 
 @app.get("/", response_class=HTMLResponse)
-async def get_chat_ui(request: Request):
+def read_root(request: Request):
     user_email = request.session.get("user_email")
     status = get_user_status(user_email)
-    
-    if user_email:
-        admin_btn_html = f"""<button type="button" class="btn-admin-panel" onclick="toggleAdminModal(true)">👑 Админ-панель</button>""" if status == "admin" else ""
-        badge_html = f"""<span class="status-badge badge-{status if status != 'admin' else 'admin'}">{status.upper()}</span>"""
 
-        auth_block = f"""
-            {admin_btn_html}
-            <div style="font-size: 11px; color: #cbd5e1; word-break: break-all; margin-bottom: 4px; display:flex; align-items:center; gap:4px; flex-wrap:wrap;">
-                <span>👤 {user_email}</span> {badge_html}
+    if user_email:
+        badge_class = f"badge-{status}"
+        admin_btn = '<button type="button" class="btn-admin-panel" onclick="toggleAdminModal(true)">👑 Admin Panel</button>' if status == "admin" else ""
+        auth_html = f"""
+            {admin_btn}
+            <div style="display:flex; align-items:center; justify-content:space-between; width:100%; margin-bottom: 4px;">
+                <span style="word-break:break-all; font-weight:600; font-size:11px; color:#fff;">{user_email} <span class="status-badge {badge_class}">{status}</span></span>
+                <a href="/auth/logout" style="color:#f87171; text-decoration:none; font-size:11px; font-weight:600;">Выйти</a>
             </div>
-            <a href="/auth/logout" style="color: #f87171; font-size: 11px; text-decoration: none; margin-bottom: 6px; display: inline-block;">Выйти из аккаунта</a>
         """
     else:
-        guest_count = int(request.cookies.get("guest_requests", "0"))
-        left_limit = max(0, 10 - guest_count)
-        auth_block = f"""
-            <div style="font-size: 11px; color: #94a3b8; margin-bottom: 6px;">Гостевых запросов: <b>{left_limit}/10</b></div>
+        auth_html = """
             <a href="/auth/google" class="btn-google-login">
-                <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.3 8.9 5 12 5z"/><path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"/><path fill="#FBBC05" d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.4 0 10.6 0 13s.6 4.6 1.6 6.6l3.7-2.9z"/><path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.3-6.7-5.3L1.6 15.6C3.5 19.4 7.4 23 12 23z"/></svg>
+                <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
                 Войти через Google
             </a>
         """
 
-    return HTML_TEMPLATE.replace("USER_AUTH_BLOCK", auth_block)
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    page_code = HTML_TEMPLATE.replace("USER_AUTH_BLOCK", auth_html)
+    return HTMLResponse(content=page_code)
