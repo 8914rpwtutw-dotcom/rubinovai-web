@@ -53,7 +53,7 @@ def get_user(telegram_id: int, username: str = "") -> dict:
     conn.close()
     return {"telegram_id": telegram_id, "username": username, "status": "free", "requests_count": 0, "last_reset_date": ""}
 
-MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
+MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.5-flash-lite"]
 current_key_idx = 0
 current_model_idx = 0
 
