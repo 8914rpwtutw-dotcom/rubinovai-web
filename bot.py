@@ -27,10 +27,28 @@ def get_db_connection():
         raise ValueError("DATABASE_URL не настроена в Environment Variables.")
     return psycopg2.connect(DATABASE_URL)
 
+def init_telegram_db():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Автоматически добавляем telegram_id в таблицу users, если его нет
+        cursor.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id BIGINT UNIQUE;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT DEFAULT '';
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Ошибка миграции БД Telegram: {e}")
+
+init_telegram_db()
+
 def get_user(telegram_id: int, username: str = "") -> dict:
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT telegram_id, username, status, requests_count, last_reset_date FROM users WHERE telegram_id = %s", (telegram_id,))
+    
+    cursor.execute("SELECT telegram_id, username, status, requests_count FROM users WHERE telegram_id = %s", (telegram_id,))
     row = cursor.fetchone()
     
     if row:
@@ -39,21 +57,23 @@ def get_user(telegram_id: int, username: str = "") -> dict:
         return {
             "telegram_id": row[0],
             "username": row[1],
-            "status": row[2],
-            "requests_count": row[3],
-            "last_reset_date": row[4]
+            "status": row[2] or "free",
+            "requests_count": row[3] or 0
         }
     
+    # Регистрация нового пользователя Telegram
+    synthetic_email = f"tg_{telegram_id}@telegram.rubinov"
     cursor.execute(
-        "INSERT INTO users (telegram_id, username, status) VALUES (%s, %s, 'free') ON CONFLICT DO NOTHING",
-        (telegram_id, username)
+        "INSERT INTO users (email, telegram_id, username, status) VALUES (%s, %s, %s, 'free') ON CONFLICT DO NOTHING",
+        (synthetic_email, telegram_id, username)
     )
     conn.commit()
     cursor.close()
     conn.close()
-    return {"telegram_id": telegram_id, "username": username, "status": "free", "requests_count": 0, "last_reset_date": ""}
+    return {"telegram_id": telegram_id, "username": username, "status": "free", "requests_count": 0}
 
-MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.5-flash-lite"]
+# Стабильные рабочие модели Gemini API
+MODELS = ["gemini-2.0-flash", "gemini-1.5-flash"]
 current_key_idx = 0
 current_model_idx = 0
 
@@ -79,7 +99,7 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
     api_keys = get_api_keys()
     if not api_keys:
-        return "⚠️ Ошибка: API-ключи Gemini не найдены в переменные окружения."
+        return "⚠️ Ошибка: API-ключи Gemini не найдены в переменных окружения."
 
     num_keys = len(api_keys)
     num_models = len(MODELS)
@@ -117,17 +137,21 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    user = get_user(message.from_user.id, message.from_user.username or "")
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile"), InlineKeyboardButton(text="💬 Поддержка", callback_data="support_ticket")]
-    ])
-    await message.answer(
-        f"👋 Привет, {message.from_user.first_name}!\n\n"
-        "Я **Rubinov AI** — твой интеллектуальный ассистент.\n"
-        "Задай мне любой вопрос, отправь фото для анализа или напиши «Нарисуй ...», чтобы сгенерировать картинку!",
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
+    try:
+        user = get_user(message.from_user.id, message.from_user.username or "")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")]
+        ])
+        await message.answer(
+            f"👋 Привет, {message.from_user.first_name}!\n\n"
+            "Я **Rubinov AI** — твой интеллектуальный ассистент.\n"
+            "Задай мне любой вопрос, отправь фото для анализа или напиши «Нарисуй ...», чтобы сгенерировать картинку!",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logging.error(f"Ошибка в /start: {e}")
+        await message.answer("⚠️ Произошла ошибка при регистрации. Попробуйте еще раз.")
 
 @dp.message(Command("profile"))
 @dp.callback_query(F.data == "profile")
@@ -137,7 +161,7 @@ async def cmd_profile(event: types.Message | types.CallbackQuery):
         f"📊 **Ваш профиль Rubinov AI**\n\n"
         f"🆔 ID: `{user['telegram_id']}`\n"
         f"👑 Статус: **{user['status'].upper()}**\n"
-        f"💬 Использовано запросов сегодня: **{user['requests_count']}**"
+        f"💬 Использовано запросов: **{user['requests_count']}**"
     )
     if isinstance(event, types.CallbackQuery):
         await event.message.answer(text, parse_mode="Markdown")
