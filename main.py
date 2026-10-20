@@ -139,7 +139,7 @@ def get_user_status(email: str) -> str:
     return "free"
 
 # Актуальная линейка моделей Google Gemini
-MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
+MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.5-flash-lite"]
 current_key_idx = 0
 current_model_idx = 0
 
