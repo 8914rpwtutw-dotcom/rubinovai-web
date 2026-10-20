@@ -7,12 +7,19 @@ from typing import Optional
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    ReplyKeyboardMarkup, 
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    BotCommand
+)
 from google import genai
 from google.genai import types as genai_types
 
 logging.basicConfig(level=logging.INFO)
 
+# --- Инициализация токена и бота ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN не установлен в Environment Variables!")
@@ -20,6 +27,7 @@ if not TELEGRAM_BOT_TOKEN:
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 
+# --- Настройка PostgreSQL (Neon) ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
@@ -27,52 +35,40 @@ def get_db_connection():
         raise ValueError("DATABASE_URL не настроена в Environment Variables.")
     return psycopg2.connect(DATABASE_URL)
 
-def init_telegram_db():
+# Ваш Telegram ID из переменных окружения Render
+SUPER_ADMIN_TG_ID = int(os.getenv("SUPER_ADMIN_TG_ID", "7325255913")) 
+
+def init_db():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        # Автоматически добавляем telegram_id в таблицу users, если его нет
         cursor.execute("""
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id BIGINT UNIQUE;
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT DEFAULT '';
+            CREATE TABLE IF NOT EXISTS users (
+                telegram_id BIGINT PRIMARY KEY,
+                username TEXT DEFAULT '',
+                status TEXT DEFAULT 'free',
+                requests_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tickets (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                message TEXT DEFAULT '',
+                status TEXT DEFAULT 'open',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
         """)
         conn.commit()
         cursor.close()
         conn.close()
     except Exception as e:
-        logging.error(f"Ошибка миграции БД Telegram: {e}")
+        logging.error(f"Ошибка инициализации БД: {e}")
 
-init_telegram_db()
+init_db()
 
-def get_user(telegram_id: int, username: str = "") -> dict:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT telegram_id, username, status, requests_count FROM users WHERE telegram_id = %s", (telegram_id,))
-    row = cursor.fetchone()
-    
-    if row:
-        cursor.close()
-        conn.close()
-        return {
-            "telegram_id": row[0],
-            "username": row[1],
-            "status": row[2] or "free",
-            "requests_count": row[3] or 0
-        }
-    
-    # Регистрация нового пользователя Telegram
-    synthetic_email = f"tg_{telegram_id}@telegram.rubinov"
-    cursor.execute(
-        "INSERT INTO users (email, telegram_id, username, status) VALUES (%s, %s, %s, 'free') ON CONFLICT DO NOTHING",
-        (synthetic_email, telegram_id, username)
-    )
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return {"telegram_id": telegram_id, "username": username, "status": "free", "requests_count": 0}
-
-# Стабильные рабочие модели Gemini API
+# --- Логика работы с Gemini API ---
 MODELS = ["gemini-2.0-flash", "gemini-1.5-flash"]
 current_key_idx = 0
 current_model_idx = 0
@@ -99,7 +95,7 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
 
     api_keys = get_api_keys()
     if not api_keys:
-        return "⚠️ Ошибка: API-ключи Gemini не найдены в переменных окружения."
+        return "❌ Ошибка: API-ключи Gemini не найдены в переменных окружения."
 
     num_keys = len(api_keys)
     num_models = len(MODELS)
@@ -133,75 +129,172 @@ def get_gemini_response(prompt: str, file_bytes: Optional[bytes] = None, mime_ty
                 current_key_idx = (current_key_idx + 1) % num_keys
             continue
 
-    return f"⚠️ Ошибка генерации ИИ: {last_error}"
+    return f"❌ Ошибка генерации ИИ: {last_error}"
 
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    try:
-        user = get_user(message.from_user.id, message.from_user.username or "")
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")]
-        ])
-        await message.answer(
-            f"👋 Привет, {message.from_user.first_name}!\n\n"
-            "Я **Rubinov AI** — твой интеллектуальный ассистент.\n"
-            "Задай мне любой вопрос, отправь фото для анализа или напиши «Нарисуй ...», чтобы сгенерировать картинку!",
-            reply_markup=kb,
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        logging.error(f"Ошибка в /start: {e}")
-        await message.answer("⚠️ Произошла ошибка при регистрации. Попробуйте еще раз.")
-
-@dp.message(Command("profile"))
-@dp.callback_query(F.data == "profile")
-async def cmd_profile(event: types.Message | types.CallbackQuery):
-    user = get_user(event.from_user.id, event.from_user.username or "")
-    text = (
-        f"📊 **Ваш профиль Rubinov AI**\n\n"
-        f"🆔 ID: `{user['telegram_id']}`\n"
-        f"👑 Статус: **{user['status'].upper()}**\n"
-        f"💬 Использовано запросов: **{user['requests_count']}**"
-    )
-    if isinstance(event, types.CallbackQuery):
-        await event.message.answer(text, parse_mode="Markdown")
-        await event.answer()
-    else:
-        await event.answer(text, parse_mode="Markdown")
-
-@dp.message(F.text | F.photo)
-async def handle_ai_message(message: types.Message):
-    user = get_user(message.from_user.id, message.from_user.username or "")
+# --- Функция получения / создания пользователя по Telegram ID ---
+def get_telegram_user(telegram_id: int, username: str = "") -> dict:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT telegram_id, username, status, requests_count FROM users WHERE telegram_id = %s", (telegram_id,))
+    row = cursor.fetchone()
     
-    if user["status"] == "banned":
-        await message.answer("🚫 Ваш аккаунт заблокирован администратором.")
+    status = "admin" if (SUPER_ADMIN_TG_ID and telegram_id == SUPER_ADMIN_TG_ID) else (row[2] if row else "free")
+
+    if row:
+        if status != row[2]:
+            cursor.execute("UPDATE users SET status = %s WHERE telegram_id = %s", (status, telegram_id))
+            conn.commit()
+        cursor.close()
+        conn.close()
+        return {"telegram_id": row[0], "username": row[1], "status": status, "requests_count": row[3] or 0}
+    
+    cursor.execute(
+        "INSERT INTO users (telegram_id, username, status) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+        (telegram_id, username, status)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return {"telegram_id": telegram_id, "username": username, "status": status, "requests_count": 0}
+
+# --- Клавиатуры интерфейса ---
+def get_main_keyboard(is_admin: bool = False):
+    buttons = [
+        [KeyboardButton(text="💎 Профиль"), KeyboardButton(text="🎨 Нарисовать картинку")],
+        [KeyboardButton(text="💬 Написать в поддержку"), KeyboardButton(text="ℹ️ О сервисе")]
+    ]
+    if is_admin:
+        buttons.append([KeyboardButton(text="👑 Панель Админа")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+# --- Хэндлеры команд ---
+@dp.message(Command("start"))
+async def cmd_start(msg: types.Message):
+    user = get_telegram_user(msg.from_user.id, msg.from_user.username or "")
+    is_admin = user["status"] == "admin"
+    await msg.answer(
+        f"✨ **Добро пожаловать в Rubinov AI!**\n\nПривет, **{msg.from_user.first_name}**!\nЯ твой персональный ассистент ИИ.",
+        reply_markup=get_main_keyboard(is_admin),
+        parse_mode="Markdown"
+    )
+
+@dp.message(F.text == "💎 Профиль")
+@dp.message(Command("profile"))
+async def cmd_profile(msg: types.Message):
+    user = get_telegram_user(msg.from_user.id, msg.from_user.username or "")
+    await msg.answer(
+        f"💎 **ЛИЧНЫЙ КАБИНЕТ RUBINOV AI**\n\n🆔 Telegram ID: `{user['telegram_id']}`\n🏷️ Статус: **{user['status'].upper()}**\n📊 Запросов: `{user['requests_count']}`",
+        parse_mode="Markdown"
+    )
+
+@dp.message(F.text == "👑 Панель Админа")
+@dp.message(Command("admin"))
+async def cmd_admin(msg: types.Message):
+    user = get_telegram_user(msg.from_user.id, msg.from_user.username or "")
+    if user["status"] != "admin":
+        await msg.answer("⛔ У вас нет доступа к панеле администратора.")
         return
 
-    prompt = message.text or message.caption or ""
+    text = (
+        "👑 **Админ-Панель Rubinov AI**\n\n"
+        "Команды управления пользователями:\n"
+        "• `/set_vip TELEGRAM_ID` — выдать VIP статус\n"
+        "• `/set_free TELEGRAM_ID` — вернуть статус Free\n"
+        "• `/ban TELEGRAM_ID` — заблокировать доступ\n"
+        "• `/unban TELEGRAM_ID` — разблокировать"
+    )
+    await msg.answer(text, parse_mode="Markdown")
+
+@dp.message(Command("set_vip"))
+async def cmd_set_vip(msg: types.Message):
+    user = get_telegram_user(msg.from_user.id, msg.from_user.username or "")
+    if user["status"] != "admin": return
+    try:
+        target_id = int(msg.text.split()[1])
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET status = 'vip' WHERE telegram_id = %s", (target_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        await msg.answer(f"✅ Пользователю `{target_id}` выдан **VIP** статус!", parse_mode="Markdown")
+    except:
+        await msg.answer("⚠️ Использование: `/set_vip TELEGRAM_ID`", parse_mode="Markdown")
+
+@dp.message(Command("ban"))
+async def cmd_ban(msg: types.Message):
+    user = get_telegram_user(msg.from_user.id, msg.from_user.username or "")
+    if user["status"] != "admin": return
+    try:
+        target_id = int(msg.text.split()[1])
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET status = 'banned' WHERE telegram_id = %s", (target_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        await msg.answer(f"🚫 Пользователь `{target_id}` заблокирован.", parse_mode="Markdown")
+    except:
+        await msg.answer("⚠️ Использование: `/ban TELEGRAM_ID`", parse_mode="Markdown")
+
+@dp.message(Command("unban"))
+async def cmd_unban(msg: types.Message):
+    user = get_telegram_user(msg.from_user.id, msg.from_user.username or "")
+    if user["status"] != "admin": return
+    try:
+        target_id = int(msg.text.split()[1])
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET status = 'free' WHERE telegram_id = %s", (target_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        await msg.answer(f"✅ Пользователь `{target_id}` разблокирован.", parse_mode="Markdown")
+    except:
+        await msg.answer("⚠️ Использование: `/unban TELEGRAM_ID`", parse_mode="Markdown")
+
+@dp.message(F.text == "🎨 Нарисовать картинку")
+async def cmd_draw(msg: types.Message):
+    await msg.answer("🎨 Отправьте запрос в формате: `Нарисуй неоновый город`", parse_mode="Markdown")
+
+@dp.message(F.text == "💬 Написать в поддержку")
+async def cmd_supp(msg: types.Message):
+    await msg.answer("💬 Задайте вопрос, и администрация свяжется с вами!", parse_mode="Markdown")
+
+@dp.message(F.text == "ℹ️ О сервисе")
+async def cmd_info(msg: types.Message):
+    await msg.answer("🤖 **Rubinov AI** — мультимодальный ИИ ассистент на базе Gemini 2.0 & Pollinations AI.", parse_mode="Markdown")
+
+@dp.message(F.text | F.photo)
+async def handle_msg(msg: types.Message):
+    user = get_telegram_user(msg.from_user.id, msg.from_user.username or "")
+    if user["status"] == "banned":
+        await msg.answer("🚫 Ваш аккаунт заблокирован.")
+        return
+
+    prompt = msg.text or msg.caption or ""
     file_bytes = None
     mime_type = None
 
-    if message.photo:
+    if msg.photo:
         if user["status"] == "free":
-            await message.answer("🔒 Отправка файлов и фото доступна только VIP и Admin пользователям!")
+            await msg.answer("🔒 Анализ фото доступен только для VIP пользователей!")
             return
-        photo = message.photo[-1]
+        photo = msg.photo[-1]
         file_info = await bot.get_file(photo.file_id)
         downloaded = await bot.download_file(file_info.file_path)
         file_bytes = downloaded.read()
         mime_type = "image/jpeg"
 
-    status_msg = await message.answer("⏳ Rubinov AI думает...")
-
-    response = get_gemini_response(prompt, file_bytes, mime_type)
-
+    status_msg = await msg.answer("🔮 *Rubinov AI думает...*", parse_mode="Markdown")
+    resp = get_gemini_response(prompt, file_bytes, mime_type)
     await status_msg.delete()
 
-    if response.startswith("IMAGE_URL:"):
-        img_url = response.replace("IMAGE_URL:", "")
-        await message.answer_photo(photo=img_url, caption=f"🎨 Изображение по запросу: *{prompt}*", parse_mode="Markdown")
+    if resp.startswith("IMAGE_URL:"):
+        img_url = resp.replace("IMAGE_URL:", "")
+        await msg.answer_photo(photo=img_url, caption=f"🎨 *Запрос:* {prompt}", parse_mode="Markdown")
     else:
-        await message.answer(response, parse_mode="Markdown")
+        await msg.answer(resp, parse_mode="Markdown")
 
 async def main():
     await dp.start_polling(bot)
