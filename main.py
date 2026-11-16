@@ -646,8 +646,8 @@ HTML_TEMPLATE = """
 
         body::before {
             content: ''; position: fixed; top: -15vh; left: 5vw; width: 45vw; height: 45vh;
-            background: radial-gradient(circle, rgba(244, 63, 94, 0.05) 0%, transparent 70%);
-            z-index: 0; pointer-events: none; filter: blur(80px);
+            background: radial-gradient(circle, rgba(244, 63, 94, 0.07) 0%, rgba(168, 85, 247, 0.02) 60%, transparent 85%);
+            z-index: 0; pointer-events: none; filter: blur(100px);
         }
 
         ::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -826,7 +826,7 @@ HTML_TEMPLATE = """
         }
 
         #chat-container { 
-            flex: 1; overflow-y: auto; padding: 20px 20px 110px 20px; 
+            flex: 1; overflow-y: auto; padding: 22px 22px 170px 22px; 
             display: flex; flex-direction: column; gap: 18px; max-width: 960px; width: 100%; margin: 0 auto; position: relative; z-index: 2;
         }
 
@@ -838,26 +838,26 @@ HTML_TEMPLATE = """
 
         .hero-banner {
             background: linear-gradient(135deg, rgba(244, 63, 94, 0.15) 0%, rgba(168, 85, 247, 0.12) 50%, rgba(10, 14, 24, 0.85) 100%);
-            border: 1px solid rgba(244, 63, 94, 0.3); border-radius: 22px; padding: 22px 24px;
+            border: 1px solid rgba(244, 63, 94, 0.3); border-radius: 22px; padding: 24px 26px;
             display: flex; align-items: center; justify-content: space-between; gap: 20px;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255,255,255,0.08);
             position: relative; overflow: hidden;
         }
         .hero-text { max-width: 580px; z-index: 2; }
         .hero-badge {
             display: inline-flex; align-items: center; gap: 6px; background: rgba(244, 63, 94, 0.2);
             border: 1px solid rgba(244, 63, 94, 0.4); color: #fda4af; font-size: 11px; font-weight: 700;
-            padding: 4px 10px; border-radius: 20px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+            padding: 4px 10px; border-radius: 20px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px;
         }
-        .hero-banner h1 { font-size: 23px; font-weight: 800; color: #ffffff; line-height: 1.2; margin-bottom: 6px; }
-        .hero-banner p { font-size: 13px; color: #cbd5e1; line-height: 1.45; }
-        .hero-ruby-art { width: 75px; height: 75px; flex-shrink: 0; filter: drop-shadow(0 0 24px rgba(244, 63, 94, 0.65)); }
+        .hero-banner h1 { font-size: 25px; font-weight: 800; color: #ffffff; line-height: 1.22; margin-bottom: 8px; }
+        .hero-banner p { font-size: 13.5px; color: #cbd5e1; line-height: 1.5; }
+        .hero-ruby-art { width: 80px; height: 80px; flex-shrink: 0; filter: drop-shadow(0 0 24px rgba(244, 63, 94, 0.65)); }
 
-        .bento-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; width: 100%; }
+        .bento-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; width: 100%; }
         .bento-card {
-            background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px;
-            padding: 16px 18px; cursor: pointer; transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-            display: flex; flex-direction: column; gap: 6px; text-align: left; position: relative;
+            background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 18px;
+            padding: 18px 20px; cursor: pointer; transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex; flex-direction: column; gap: 8px; text-align: left; position: relative;
         }
         .bento-card:hover {
             background: var(--card-hover); border-color: rgba(244, 63, 94, 0.45);
@@ -865,17 +865,17 @@ HTML_TEMPLATE = """
         }
         .bento-card-top { display: flex; align-items: center; justify-content: space-between; }
         .bento-icon {
-            width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
-            font-size: 16px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+            width: 36px; height: 36px; border-radius: 11px; display: flex; align-items: center; justify-content: center;
+            font-size: 18px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
         }
         .bento-tag { font-size: 10px; font-weight: 700; color: #a855f7; background: rgba(168,85,247,0.14); padding: 3px 8px; border-radius: 6px; }
-        .bento-card h4 { font-size: 14px; font-weight: 700; color: #ffffff; }
-        .bento-card p { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
+        .bento-card h4 { font-size: 14.5px; font-weight: 700; color: #ffffff; }
+        .bento-card p { font-size: 12px; color: var(--text-muted); line-height: 1.45; }
 
         .quick-prompts-row { display: flex; gap: 8px; flex-wrap: wrap; }
         .quick-chip {
             background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); color: #cbd5e1;
-            padding: 6px 12px; border-radius: 20px; font-size: 11px; cursor: pointer; transition: all 0.2s;
+            padding: 7px 13px; border-radius: 20px; font-size: 11.5px; cursor: pointer; transition: all 0.2s;
         }
         .quick-chip:hover { background: rgba(244, 63, 94, 0.14); border-color: rgba(244, 63, 94, 0.35); color: #fff; }
 
@@ -925,16 +925,16 @@ HTML_TEMPLATE = """
 
         #input-wrapper {
             position: absolute; bottom: 0; left: 0; right: 0; 
-            padding: 8px 20px 12px 20px; padding-bottom: calc(12px + env(safe-area-inset-bottom));
-            background: linear-gradient(180deg, rgba(1, 2, 4, 0) 0%, rgba(1, 2, 4, 0.9) 50%, var(--bg-main) 100%);
+            padding: 12px 22px 16px 22px; padding-bottom: calc(16px + env(safe-area-inset-bottom));
+            background: linear-gradient(180deg, rgba(1, 2, 4, 0) 0%, rgba(1, 2, 4, 0.94) 35%, var(--bg-main) 100%);
             z-index: 20;
         }
-        .input-area-max { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; }
+        .input-area-max { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
 
         .persona-bar { display: flex; align-items: center; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
         .persona-pill {
             background: rgba(10, 13, 20, 0.85); border: 1px solid var(--border-color); color: var(--text-muted);
-            padding: 4px 11px; border-radius: 20px; font-size: 11px; font-weight: 600; cursor: pointer;
+            padding: 5px 12px; border-radius: 20px; font-size: 11.5px; font-weight: 600; cursor: pointer;
             white-space: nowrap; transition: all 0.2s; display: flex; align-items: center; gap: 5px;
         }
         .persona-pill:hover { border-color: rgba(244, 63, 94, 0.35); color: #fff; }
@@ -945,26 +945,26 @@ HTML_TEMPLATE = """
 
         #input-container { 
             background: rgba(8, 11, 18, 0.95); backdrop-filter: blur(26px); 
-            border: 1px solid rgba(244, 63, 94, 0.25); border-radius: 16px; 
-            padding: 6px 9px; display: flex; flex-direction: column; gap: 5px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(244, 63, 94, 0.25); border-radius: 18px; 
+            padding: 7px 10px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 12px 35px rgba(0, 0, 0, 0.7);
         }
-        #input-container:focus-within { border-color: rgba(244, 63, 94, 0.55); box-shadow: 0 10px 30px rgba(244, 63, 94, 0.14); }
-        #file-info-bar { display: none; align-items: center; justify-content: space-between; background: rgba(244, 63, 94, 0.14); padding: 4px 9px; border-radius: 7px; font-size: 10.5px; color: #fda4af; }
-        #file-info-bar button { background: none; border: none; color: #fb7185; cursor: pointer; font-size: 12px; }
+        #input-container:focus-within { border-color: rgba(244, 63, 94, 0.55); box-shadow: 0 12px 35px rgba(244, 63, 94, 0.14); }
+        #file-info-bar { display: none; align-items: center; justify-content: space-between; background: rgba(244, 63, 94, 0.14); padding: 5px 10px; border-radius: 8px; font-size: 11px; color: #fda4af; }
+        #file-info-bar button { background: none; border: none; color: #fb7185; cursor: pointer; font-size: 13px; }
 
-        .input-row { display: flex; gap: 6px; align-items: center; width: 100%; }
+        .input-row { display: flex; gap: 7px; align-items: center; width: 100%; }
         .mini-btn { 
             background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-muted); 
-            padding: 8px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;
+            padding: 9px; border-radius: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;
         }
         .mini-btn:hover { background: rgba(244, 63, 94, 0.14); border-color: rgba(244, 63, 94, 0.35); color: #fff; }
-        #prompt-input { flex: 1; background: transparent; border: none; color: #ffffff; font-size: 13px; outline: none; min-width: 0; padding: 4px; }
+        #prompt-input { flex: 1; background: transparent; border: none; color: #ffffff; font-size: 13.5px; outline: none; min-width: 0; padding: 5px; }
         #prompt-input::placeholder { color: var(--text-muted); }
         
         .btn-action { 
-            background: var(--ruby-gradient); color: #ffffff; border: none; border-radius: 10px; 
-            padding: 9px 16px; font-size: 12px; font-weight: 700; cursor: pointer; flex-shrink: 0; 
-            display: flex; align-items: center; justify-content: center; min-width: 90px; transition: all 0.2s;
+            background: var(--ruby-gradient); color: #ffffff; border: none; border-radius: 11px; 
+            padding: 10px 18px; font-size: 12.5px; font-weight: 700; cursor: pointer; flex-shrink: 0; 
+            display: flex; align-items: center; justify-content: center; min-width: 96px; transition: all 0.2s;
         }
         .btn-action:hover { box-shadow: 0 4px 18px rgba(244, 63, 94, 0.4); }
         .btn-action.cancel-mode { background: rgba(244, 63, 94, 0.14); border: 1px solid rgba(244, 63, 94, 0.38); color: #fb7185; }
@@ -973,8 +973,8 @@ HTML_TEMPLATE = """
             #sidebar { position: fixed; top: 0; left: 0; margin-left: 0 !important; transform: translateX(-100%); }
             #sidebar.mobile-open { transform: translateX(0); }
             #chat-header { padding: 0 14px; }
-            #chat-container { padding: 14px 14px 145px 14px; }
-            #input-wrapper { padding: 8px 14px; }
+            #chat-container { padding: 14px 14px 165px 14px; }
+            #input-wrapper { padding: 10px 14px; }
             .bento-grid { grid-template-columns: 1fr; }
             .hero-ruby-art { display: none; }
             .hero-banner { padding: 18px; }
@@ -1162,8 +1162,8 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        let chats = JSON.parse(localStorage.getItem('rubinov_chats_v6') || '[]');
-        let currentChatId = localStorage.getItem('rubinov_active_chat_v6') || null;
+        let chats = JSON.parse(localStorage.getItem('rubinov_chats_v5') || '[]');
+        let currentChatId = localStorage.getItem('rubinov_active_chat_v5') || null;
         let selectedFile = null;
         let selectedFileBase64 = null;
         let activeController = null;
@@ -1237,8 +1237,8 @@ HTML_TEMPLATE = """
         }
 
         function saveState() {
-            localStorage.setItem('rubinov_chats_v6', JSON.stringify(chats));
-            localStorage.setItem('rubinov_active_chat_v6', currentChatId);
+            localStorage.setItem('rubinov_chats_v5', JSON.stringify(chats));
+            localStorage.setItem('rubinov_active_chat_v5', currentChatId);
             renderChats();
         }
 
