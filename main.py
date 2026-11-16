@@ -139,7 +139,7 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 
 PERSONA_INSTRUCTIONS = {
-    "default": "Ты Rubinov AI — передовой, точный и дружелюбный ИИ-ассистент. Отвечай структурированно, ясно и по делу.",
+    "default": "Ты Rubinov AI — передовой, точный и дружелюбный ИИ-ассистент. Отвечай структурированно, грамотным и красивым текстом.",
     "coder": "Ты Senior Fullstack & Python архитектор. Пиши чистый, безопасный и оптимизированный код с комментариями и пояснениями.",
     "copywriter": "Ты топовый креативный копирайтер и маркетолог. Создавай цепляющие тексты, посты и сценарии с высокой конверсией.",
     "translator": "Ты профессиональный переводчик-синхронист. Делай точный, естественный перевод с сохранением стиля и нюансов оригинала."
@@ -174,17 +174,17 @@ def get_gemini_response(prompt: str, persona: str = "default", file_bytes: Optio
                 clean_prompt = clean_prompt[len(prefix):].strip()
                 break
         if not clean_prompt:
-            clean_prompt = "beautiful futuristic neon ruby cyberpunk landscape"
+            clean_prompt = "masterpiece futuristic neon ruby cyberpunk landscape high resolution"
         
         import urllib.parse
         encoded_prompt = urllib.parse.quote(clean_prompt)
-        img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+        img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1280&height=1280&nologo=true&enhance=true"
         
         return f"""Вот ваше сгенерированное изображение по запросу: *"{clean_prompt}"*
 
 <div style="margin-top:14px;">
-    <img src="{img_url}" alt="{clean_prompt}" style="max-width:100%; border-radius:16px; display:block; margin-bottom:12px; box-shadow: 0 12px 40px rgba(244, 63, 94, 0.25); border: 1px solid rgba(255,255,255,0.1);" />
-    <a href="{img_url}" target="_blank" download="rubinov_ai.jpg" style="display:inline-flex; align-items: center; gap: 8px; background: linear-gradient(135deg, #f43f5e, #8b5cf6); color:#fff; padding:9px 18px; border-radius:12px; font-size:12px; text-decoration:none; font-weight:600; box-shadow: 0 4px 20px rgba(244, 63, 94, 0.35);">📥 Скачать в высоком разрешении</a>
+    <img src="{img_url}" alt="{clean_prompt}" style="max-width:100%; border-radius:16px; display:block; margin-bottom:12px; box-shadow: 0 14px 45px rgba(244, 63, 94, 0.3); border: 1px solid rgba(255,255,255,0.12);" />
+    <a href="{img_url}" target="_blank" download="rubinov_ai.jpg" style="display:inline-flex; align-items: center; gap: 8px; background: linear-gradient(135deg, #f43f5e, #8b5cf6); color:#fff; padding:10px 20px; border-radius:12px; font-size:12.5px; text-decoration:none; font-weight:700; box-shadow: 0 4px 20px rgba(244, 63, 94, 0.4);">📥 Скачать в высоком разрешении</a>
 </div>"""
 
     api_keys = get_api_keys()
@@ -618,7 +618,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Rubinov AI — Neural Studio</title>
+    <title>Rubinov AI</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -671,8 +671,7 @@ HTML_TEMPLATE = """
 
         .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 0 4px; }
         .brand-logo-svg { width: 30px; height: 30px; filter: drop-shadow(0 0 12px rgba(244, 63, 94, 0.5)); flex-shrink: 0; }
-        .brand h2 { font-size: 15px; font-weight: 800; background: linear-gradient(90deg, #fff, #fda4af); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .brand span { font-size: 9.5px; color: var(--text-muted); font-weight: 600; display: block; text-transform: uppercase; letter-spacing: 0.8px; }
+        .brand h2 { font-size: 16px; font-weight: 800; background: linear-gradient(90deg, #fff, #fda4af); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 
         .btn-new-chat { 
             background: var(--ruby-gradient); color: #ffffff; border: none; padding: 10px 14px; 
@@ -843,11 +842,11 @@ HTML_TEMPLATE = """
 
         .msg-user { 
             background: var(--user-msg-bg); color: #ffffff; border: 1px solid rgba(244, 63, 94, 0.25); 
-            border-radius: 16px 16px 4px 16px; padding: 11px 15px; font-size: 13px; line-height: 1.5; max-width: 80%; word-break: break-word; 
+            border-radius: 16px 16px 4px 16px; padding: 11px 15px; font-size: 13.5px; line-height: 1.55; max-width: 80%; word-break: break-word; 
         }
         .msg-bot { 
             background: var(--bot-msg-bg); border: 1px solid var(--border-color); color: #e2e8f0; 
-            border-radius: 16px 16px 16px 4px; padding: 16px 20px; font-size: 13px; line-height: 1.6; max-width: 90%; word-break: break-word;
+            border-radius: 16px 16px 16px 4px; padding: 16px 20px; font-size: 13.5px; line-height: 1.65; max-width: 90%; word-break: break-word;
             box-shadow: 0 6px 25px rgba(0,0,0,0.3);
         }
         .msg-bot p { margin-bottom: 9px; }
@@ -856,6 +855,11 @@ HTML_TEMPLATE = """
         .msg-bot code { background: rgba(255, 255, 255, 0.06); padding: 2px 5px; border-radius: 5px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #fda4af; }
         .msg-bot pre { background: #020306; padding: 12px; border-radius: 10px; overflow-x: auto; margin: 10px 0; border: 1px solid rgba(255,255,255,0.08); position: relative; }
         .msg-bot pre code { background: transparent; padding: 0; color: #e2e8f0; }
+
+        .chat-image-thumb {
+            max-width: 100%; max-height: 260px; border-radius: 10px; display: block; margin-bottom: 8px;
+            border: 1px solid rgba(255,255,255,0.12); object-fit: cover; box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+        }
 
         .copy-code-btn {
             position: absolute; top: 7px; right: 7px; background: rgba(255,255,255,0.06);
@@ -1028,7 +1032,7 @@ HTML_TEMPLATE = """
                 <path d="M12 35 L88 35 M50 8 L30 35 M50 8 L70 35 M50 92 L30 35 M50 92 L70 35" stroke="url(#rubyGrad)" stroke-width="2" opacity="0.7" />
                 <circle cx="50" cy="48" r="12" fill="#f43f5e" opacity="0.25" />
             </svg>
-            <div><h2>Rubinov AI</h2><span>Neural Studio</span></div>
+            <div><h2>Rubinov AI</h2></div>
         </div>
 
         <button type="button" class="btn-new-chat" onclick="createNewChat()">
@@ -1099,9 +1103,10 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        let chats = JSON.parse(localStorage.getItem('rubinov_chats_v3') || '[]');
-        let currentChatId = localStorage.getItem('rubinov_active_chat_v3') || null;
+        let chats = JSON.parse(localStorage.getItem('rubinov_chats_v4') || '[]');
+        let currentChatId = localStorage.getItem('rubinov_active_chat_v4') || null;
         let selectedFile = null;
+        let selectedFileBase64 = null;
         let activeController = null;
         let isGenerating = false;
         let currentPersona = 'default';
@@ -1165,8 +1170,8 @@ HTML_TEMPLATE = """
         }
 
         function saveState() {
-            localStorage.setItem('rubinov_chats_v3', JSON.stringify(chats));
-            localStorage.setItem('rubinov_active_chat_v3', currentChatId);
+            localStorage.setItem('rubinov_chats_v4', JSON.stringify(chats));
+            localStorage.setItem('rubinov_active_chat_v4', currentChatId);
             renderChats();
         }
 
@@ -1519,7 +1524,7 @@ HTML_TEMPLATE = """
                 const welcome = document.createElement('div');
                 welcome.className = 'welcome-minimal';
                 welcome.innerHTML = `
-                    <h1>Rubinov AI Studio</h1>
+                    <h1>Rubinov AI</h1>
                     <p>Задайте любой вопрос, пишите код, создавайте арты или анализируйте изображения с помощью передовых моделей Gemini.</p>
                 `;
                 chatContainer.appendChild(welcome);
@@ -1534,8 +1539,14 @@ HTML_TEMPLATE = """
                     const bubble = document.createElement('div');
                     bubble.className = 'msg-user';
                     let html = '';
-                    if (msg.file_name) html += `<div class="file-preview-tag">📎 ${escapeHtml(msg.file_name)}</div>`;
-                    html += escapeHtml(msg.text);
+                    if (msg.file_data) {
+                        html += `<img src="${msg.file_data}" class="chat-image-thumb" alt="Загруженное фото" />`;
+                    } else if (msg.file_name) {
+                        html += `<div class="file-preview-tag">📎 ${escapeHtml(msg.file_name)}</div>`;
+                    }
+                    if (msg.text) {
+                        html += `<div>${escapeHtml(msg.text)}</div>`;
+                    }
                     bubble.innerHTML = html;
                     row.appendChild(bubble);
                 } else {
@@ -1563,12 +1574,19 @@ HTML_TEMPLATE = """
             const file = e.target.files[0];
             if (!file) return;
             selectedFile = file;
-            document.getElementById('file-name-text').textContent = `📎 ${file.name}`;
-            document.getElementById('file-info-bar').style.display = 'flex';
+            
+            const reader = new FileReader();
+            reader.onload = function(uploadEvent) {
+                selectedFileBase64 = uploadEvent.target.result;
+                document.getElementById('file-name-text').textContent = `📎 ${file.name}`;
+                document.getElementById('file-info-bar').style.display = 'flex';
+            };
+            reader.readAsDataURL(file);
         }
 
         function removeSelectedFile() {
             selectedFile = null;
+            selectedFileBase64 = null;
             document.getElementById('file-input').value = '';
             document.getElementById('file-info-bar').style.display = 'none';
         }
@@ -1607,15 +1625,18 @@ HTML_TEMPLATE = """
                 activeChat.name = text.length > 22 ? text.substring(0, 22) + '...' : text;
             }
 
+            const currentFile = selectedFile;
+            const currentFileBase64 = selectedFileBase64;
+
             activeChat.messages.push({
                 role: 'user',
                 text: text,
-                file_name: selectedFile ? selectedFile.name : null
+                file_name: currentFile ? currentFile.name : null,
+                file_data: currentFileBase64
             });
             saveState();
 
             input.value = '';
-            const currentFile = selectedFile;
             removeSelectedFile();
 
             showLoader();
